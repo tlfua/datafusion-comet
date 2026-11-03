@@ -1,0 +1,11 @@
+[package]
+name = "hll-compare"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+datafusion-comet-spark-expr = { path = "../comet/native/spark-expr" }
+datafusion = { version = "55.2.0", default-features = false }
+
+[workspace]

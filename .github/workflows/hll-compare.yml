@@ -1,0 +1,101 @@
+name: hll-compare
+
+# Scratch experiment for https://github.com/apache/datafusion-comet/issues/7396 :
+# Spark 4.x HLL expressions on DataSketches-Java 6.1.1 / 6.2.0 vs Comet's native HLL
+# (datasketches crate 0.6.0) at apache/datafusion-comet@644a870.
+
+on:
+  push:
+    branches: [tlfua/exp/7396-hll-compare]
+  workflow_dispatch:
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: apache/datafusion-comet
+          ref: 644a8708839270d382a78715fca7e2b724143588
+          path: comet
+          sparse-checkout: native
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Fetch DataSketches-Java jars from Maven Central
+        run: |
+          set -euo pipefail
+          base=https://repo1.maven.org/maven2/org/apache/datasketches
+          for v in 6.1.1 6.2.0; do
+            mkdir -p jars/$v
+            curl -fsSL -o jars/$v/datasketches-java.jar $base/datasketches-java/$v/datasketches-java-$v.jar
+            echo "$(curl -fsSL $base/datasketches-java/$v/datasketches-java-$v.jar.sha1 | cut -c1-40)  jars/$v/datasketches-java.jar" | sha1sum -c -
+            curl -fsSL -o jars/$v/datasketches-memory.jar $base/datasketches-memory/3.0.2/datasketches-memory-3.0.2.jar
+            echo "$(curl -fsSL $base/datasketches-memory/3.0.2/datasketches-memory-3.0.2.jar.sha1 | cut -c1-40)  jars/$v/datasketches-memory.jar" | sha1sum -c -
+          done
+
+      - name: Build Comet HLL replayer
+        run: |
+          set -euo pipefail
+          cp comet/native/Cargo.lock rust/Cargo.lock
+          cd rust
+          cargo build --release
+          cargo tree -i datasketches --depth 0
+          cargo tree -i datafusion-comet-spark-expr --depth 0
+
+      - name: Run comparison
+        run: |
+          set -euo pipefail
+          JOPTS="-Xmx6g --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-exports=java.base/jdk.internal.misc=ALL-UNNAMED --add-exports=java.base/jdk.internal.ref=ALL-UNNAMED"
+          for v in 6.1.1 6.2.0; do
+            cp="jars/$v/*"
+            mkdir -p build/$v
+            javac -cp "$cp" -d build/$v java/HllSpark.java
+            echo "::group::datasketches-java $v gen"
+            time java $JOPTS -cp "build/$v:$cp" HllSpark gen out/$v
+            echo "::endgroup::"
+            echo "::group::comet replay ($v corpus)"
+            time ./rust/target/release/hll-compare out/$v
+            echo "::endgroup::"
+            echo "::group::java $v verify"
+            time java $JOPTS -cp "build/$v:$cp" HllSpark verify out/$v
+            echo "::endgroup::"
+            python3 summarize.py out/$v "Spark mirror on datasketches-java $v vs Comet (datasketches 0.6.0)" | tee -a summary.md
+          done
+          {
+            echo "## datasketches-java 6.1.1 vs 6.2.0 (Spark 4.0 vs 4.1/4.2)"
+            echo
+            if cmp -s out/6.1.1/cases.tsv out/6.2.0/cases.tsv && diff -rq out/6.1.1/java out/6.2.0/java && diff -rq out/6.1.1/pool out/6.2.0/pool; then
+              echo "All Java estimates and all Java-serialized bytes are identical."
+            else
+              echo "Java outputs DIFFER between 6.1.1 and 6.2.0:"
+              echo '```'
+              diff out/6.1.1/cases.tsv out/6.2.0/cases.tsv | head -40 || true
+              diff -rq out/6.1.1/java out/6.2.0/java | head -40 || true
+              echo '```'
+            fi
+          } | tee -a summary.md
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hll-compare-results
+          path: |
+            summary.md
+            out/*/cases.tsv
+            out/*/pool.tsv
+            out/*/rust.tsv
+            out/*/verify.tsv
