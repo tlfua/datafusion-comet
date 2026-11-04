@@ -127,14 +127,16 @@ jobs:
           case '${{ matrix.expect }}' in
             pass)
               test "$exit_code" = 0 || { echo "::error::expected IcebergReflectionSuite to pass"; exit 1; }
+              grep -F -- "- $probe" mvn.log | grep -vqF "FAILED" || { echo "::error::probe test did not run"; exit 1; }
               ;;
             probe-fails)
               test "$exit_code" != 0 || { echo "::error::expected a failure on Iceberg 1.12"; exit 1; }
               grep -qF "$probe *** FAILED" mvn.log || { echo "::error::probe test did not fail"; exit 1; }
               grep -qF "$msg" mvn.log || { echo "::error::failure message differs from the issue"; exit 1; }
               echo "Reproduced: probe test failed with: $msg"
-              echo "Other failed tests (should be none besides the probe):"
-              grep -F '*** FAILED' mvn.log | grep -vF "$probe" || echo "(none)"
+              others=$(grep -F '*** FAILED' mvn.log | grep -vF "$probe" || true)
+              if [ -n "$others" ]; then echo "::error::unrelated failures:"; echo "$others"; exit 1; fi
+              grep -qE 'Tests: succeeded [0-9]+, failed 1,' mvn.log || { echo "::error::expected exactly one failure"; exit 1; }
               ;;
           esac
 
