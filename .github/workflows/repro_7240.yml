@@ -1,0 +1,148 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Throwaway fork-only workflow reproducing apache/datafusion-comet#7240: the executor
+# reflection probe for native Iceberg writes fails on Iceberg 1.12 because
+# ManifestFiles.read(ManifestFile, FileIO) was removed. Not intended for upstream.
+#
+# Each matrix leg pins the Spark 4.1 profile's Iceberg runtime, runs IcebergReflectionSuite,
+# and then checks that the outcome matches the expectation for that version, so a green leg
+# means "behaved as expected" (1.11 passes, 1.12 fails with the exact issue message).
+
+name: Repro 7240 (Iceberg 1.12 manifest read)
+
+on:
+  push:
+    branches:
+      - 'tlfua/ci/7240-*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUST_BACKTRACE: 1
+  RUSTFLAGS: "-Clink-arg=-fuse-ld=bfd"
+
+jobs:
+  build-native:
+    name: Build native library
+    runs-on: ubuntu-24.04
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+          jdk-version: 17
+      - name: cargo build --profile ci
+        run: |
+          cd native
+          cargo build --profile ci
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-lib-linux
+          path: |
+            native/target/ci/libcomet.so
+            native/target/ci/libcomet_test_udfs.so
+          retention-days: 3
+
+  reflection-probe:
+    name: IcebergReflectionSuite (Spark 4.1, Iceberg ${{ matrix.iceberg }})
+    needs: build-native
+    runs-on: ubuntu-24.04
+    container:
+      image: amd64/rust
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - iceberg: 1.11.0
+            expect: pass
+          - iceberg: 1.12.0
+            expect: probe-fails
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+          jdk-version: 17
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-lib-linux
+          path: native/target/release/
+
+      - name: Pin Iceberg ${{ matrix.iceberg }} in the spark-4.1 profile (CI only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The spark-4.1 profile is the only place spark/pom.xml pins 1.11.0.
+          test "$(grep -c '<version>1.11.0</version>' spark/pom.xml)" = 1
+          sed -i 's#<version>1.11.0</version>#<version>${{ matrix.iceberg }}</version>#' spark/pom.xml
+          git --no-pager diff spark/pom.xml
+
+      - name: Run IcebergReflectionSuite
+        id: run
+        shell: bash
+        env:
+          SPARK_LOCAL_HOSTNAME: localhost
+          SPARK_LOCAL_IP: 127.0.0.1
+        run: |
+          set +e
+          SPARK_HOME="$(pwd)" MAVEN_OPTS="-Xmx4G -Xms2G" ./mvnw -B -Prelease -Pspark-4.1 test \
+            -Dtest=none -Dsuites="org.apache.comet.iceberg.IcebergReflectionSuite" \
+            2>&1 | tee mvn.log
+          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Show resolved Iceberg runtime
+        shell: bash
+        run: ls ~/.m2/repository/org/apache/iceberg/iceberg-spark-runtime-4.1_2.13/ || true
+
+      - name: Check outcome (expect ${{ matrix.expect }})
+        shell: bash
+        run: |
+          set -uo pipefail
+          exit_code='${{ steps.run.outputs.exit }}'
+          echo "maven exit code: $exit_code"
+          echo "--- scalatest results ---"
+          grep -E '^\- |\*\*\* FAILED|Tests: succeeded|NoSuchMethodException|executor-side Iceberg reflection' mvn.log || true
+          msg='NoSuchMethodException: org.apache.iceberg.ManifestFiles.read(org.apache.iceberg.ManifestFile,org.apache.iceberg.io.FileIO)'
+          probe='executor-side reflection surface resolves against the linked Iceberg'
+          case '${{ matrix.expect }}' in
+            pass)
+              test "$exit_code" = 0 || { echo "::error::expected IcebergReflectionSuite to pass"; exit 1; }
+              ;;
+            probe-fails)
+              test "$exit_code" != 0 || { echo "::error::expected a failure on Iceberg 1.12"; exit 1; }
+              grep -qF "$probe *** FAILED" mvn.log || { echo "::error::probe test did not fail"; exit 1; }
+              grep -qF "$msg" mvn.log || { echo "::error::failure message differs from the issue"; exit 1; }
+              echo "Reproduced: probe test failed with: $msg"
+              echo "Other failed tests (should be none besides the probe):"
+              grep -F '*** FAILED' mvn.log | grep -vF "$probe" || echo "(none)"
+              ;;
+          esac
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mvn-log-iceberg-${{ matrix.iceberg }}
+          path: |
+            mvn.log
+            spark/target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 7
