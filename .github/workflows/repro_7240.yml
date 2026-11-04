@@ -33,38 +33,19 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
+# libcomet.so built by run 41782255087 (native/ identical to upstream main 0f7f8e453; this branch
+# only changes workflows), reused to skip a ~30 minute native build.
 env:
+  NATIVE_RUN_ID: "41782255087"
+
   RUST_BACKTRACE: 1
   RUSTFLAGS: "-Clink-arg=-fuse-ld=bfd"
 
 jobs:
-  build-native:
-    name: Build native library
-    runs-on: ubuntu-24.04
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-          jdk-version: 17
-      - name: cargo build --profile ci
-        run: |
-          cd native
-          cargo build --profile ci
-      - uses: actions/upload-artifact@v7
-        with:
-          name: native-lib-linux
-          path: |
-            native/target/ci/libcomet.so
-            native/target/ci/libcomet_test_udfs.so
-          retention-days: 3
-
   reflection-probe:
     name: IcebergReflectionSuite (Spark 4.1, Iceberg ${{ matrix.iceberg }})
-    needs: build-native
     runs-on: ubuntu-24.04
     container:
       image: amd64/rust
@@ -86,6 +67,8 @@ jobs:
         with:
           name: native-lib-linux
           path: native/target/release/
+          run-id: ${{ env.NATIVE_RUN_ID }}
+          github-token: ${{ github.token }}
 
       - name: Pin Iceberg ${{ matrix.iceberg }} in the spark-4.1 profile (CI only)
         shell: bash
@@ -96,6 +79,19 @@ jobs:
           sed -i 's#<version>1.11.0</version>#<version>${{ matrix.iceberg }}</version>#' spark/pom.xml
           # git does not treat the container checkout as a repository, so show the result with grep.
           grep -n '<version>${{ matrix.iceberg }}</version>' spark/pom.xml
+
+      # Iceberg 1.12 adds `default Configuration getConf()` to HadoopConfigurable, so this test
+      # helper's deliberately non-`override` getConf no longer compiles. Test-only shim so the
+      # spark test sources compile on 1.12; it is unrelated to the probe being reproduced.
+      - name: Test-compile shim for Iceberg 1.12 (HadoopConfigurable.getConf)
+        if: matrix.iceberg == '1.12.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=spark/src/test/scala/org/apache/comet/CometIcebergWriteDetectionSuite.scala
+          test "$(grep -c '^  def getConf: Configuration = delegate.getConf$' "$f")" = 1
+          sed -i 's/^  def getConf: Configuration = delegate.getConf$/  override def getConf: Configuration = delegate.getConf/' "$f"
+          grep -n 'override def getConf' "$f"
 
       - name: Run IcebergReflectionSuite
         id: run
