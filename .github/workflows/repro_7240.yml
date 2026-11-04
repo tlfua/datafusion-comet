@@ -33,19 +33,14 @@ on:
 
 permissions:
   contents: read
-  actions: read
 
-# libcomet.so built by run 41782255087 (native/ identical to upstream main 0f7f8e453; this branch
-# only changes workflows), reused to skip a ~30 minute native build.
-env:
-  NATIVE_RUN_ID: "41782255087"
-
-  RUST_BACKTRACE: 1
-  RUSTFLAGS: "-Clink-arg=-fuse-ld=bfd"
-
+# Comet's spark *test* sources do not compile against Iceberg 1.12 (HadoopConfigurable.getConf became
+# a default method; the vendored RESTCatalogAdapter uses REST APIs changed in 1.12), so instead of
+# IcebergReflectionSuite this compiles only the main sources and calls the eligibility gate's entry
+# point, IcebergReflection.executorReflectionUnresolved, directly. No native library is needed.
 jobs:
   reflection-probe:
-    name: IcebergReflectionSuite (Spark 4.1, Iceberg ${{ matrix.iceberg }})
+    name: executorReflectionUnresolved (Spark 4.1, Iceberg ${{ matrix.iceberg }})
     runs-on: ubuntu-24.04
     container:
       image: amd64/rust
@@ -54,7 +49,7 @@ jobs:
       matrix:
         include:
           - iceberg: 1.11.0
-            expect: pass
+            expect: resolves
           - iceberg: 1.12.0
             expect: probe-fails
     steps:
@@ -63,12 +58,6 @@ jobs:
         with:
           rust-version: stable
           jdk-version: 17
-      - uses: actions/download-artifact@v8
-        with:
-          name: native-lib-linux
-          path: native/target/release/
-          run-id: ${{ env.NATIVE_RUN_ID }}
-          github-token: ${{ github.token }}
 
       - name: Pin Iceberg ${{ matrix.iceberg }} in the spark-4.1 profile (CI only)
         shell: bash
@@ -80,68 +69,65 @@ jobs:
           # git does not treat the container checkout as a repository, so show the result with grep.
           grep -n '<version>${{ matrix.iceberg }}</version>' spark/pom.xml
 
-      # Iceberg 1.12 adds `default Configuration getConf()` to HadoopConfigurable, so this test
-      # helper's deliberately non-`override` getConf no longer compiles. Test-only shim so the
-      # spark test sources compile on 1.12; it is unrelated to the probe being reproduced.
-      - name: Test-compile shim for Iceberg 1.12 (HadoopConfigurable.getConf)
-        if: matrix.iceberg == '1.12.0'
+      - name: Compile main sources and write the test classpath
         shell: bash
         run: |
           set -euo pipefail
-          f=spark/src/test/scala/org/apache/comet/CometIcebergWriteDetectionSuite.scala
-          test "$(grep -c '^  def getConf: Configuration = delegate.getConf$' "$f")" = 1
-          sed -i 's/^  def getConf: Configuration = delegate.getConf$/  override def getConf: Configuration = delegate.getConf/' "$f"
-          grep -n 'override def getConf' "$f"
-
-      - name: Run IcebergReflectionSuite
-        id: run
-        shell: bash
-        env:
-          SPARK_LOCAL_HOSTNAME: localhost
-          SPARK_LOCAL_IP: 127.0.0.1
-        run: |
-          set +e
-          SPARK_HOME="$(pwd)" MAVEN_OPTS="-Xmx4G -Xms2G" ./mvnw -B -Prelease -Pspark-4.1 test \
-            -Dtest=none -Dsuites="org.apache.comet.iceberg.IcebergReflectionSuite" \
+          MAVEN_OPTS="-Xmx4G -Xms2G" ./mvnw -B -Pspark-4.1 -Dmaven.test.skip=true \
+            compile dependency:build-classpath -Dmdep.includeScope=test -Dmdep.outputFile=cp.txt \
             2>&1 | tee mvn.log
-          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          test -s spark/cp.txt
 
-      - name: Show resolved Iceberg runtime
+      - name: List ManifestFiles.read overloads in the resolved runtime
         shell: bash
-        run: ls ~/.m2/repository/org/apache/iceberg/iceberg-spark-runtime-4.1_2.13/ || true
+        run: |
+          set -euo pipefail
+          jar=$(tr ':' '\n' < spark/cp.txt | grep '/iceberg-spark-runtime-4.1_2.13/')
+          echo "$jar" | tee javap.txt
+          javap -cp "$jar" org.apache.iceberg.ManifestFiles | grep ' read(' | tee -a javap.txt
+
+      - name: Call IcebergReflection.executorReflectionUnresolved
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p probe
+          cat > probe/Probe.java <<'JAVA'
+          public class Probe {
+            public static void main(String[] args) {
+              System.out.println("RESULT: "
+                  + org.apache.comet.iceberg.IcebergReflection.executorReflectionUnresolved());
+            }
+          }
+          JAVA
+          cp="spark/target/classes:common/target/classes:$(cat spark/cp.txt)"
+          javac -cp "$cp" -d probe probe/Probe.java
+          java -cp "probe:$cp" Probe 2>&1 | tee probe.log
 
       - name: Check outcome (expect ${{ matrix.expect }})
         shell: bash
         run: |
           set -uo pipefail
-          exit_code='${{ steps.run.outputs.exit }}'
-          echo "maven exit code: $exit_code"
-          echo "--- scalatest results ---"
-          grep -E '^\- |\*\*\* FAILED|Tests: succeeded|NoSuchMethodException|executor-side Iceberg reflection' mvn.log || true
-          msg='NoSuchMethodException: org.apache.iceberg.ManifestFiles.read(org.apache.iceberg.ManifestFile,org.apache.iceberg.io.FileIO)'
-          probe='executor-side reflection surface resolves against the linked Iceberg'
+          result=$(grep '^RESULT: ' probe.log)
+          echo "$result"
+          msg='Some(executor-side Iceberg reflection did not resolve: NoSuchMethodException: org.apache.iceberg.ManifestFiles.read(org.apache.iceberg.ManifestFile,org.apache.iceberg.io.FileIO))'
           case '${{ matrix.expect }}' in
-            pass)
-              test "$exit_code" = 0 || { echo "::error::expected IcebergReflectionSuite to pass"; exit 1; }
-              grep -F -- "- $probe" mvn.log | grep -vqF "FAILED" || { echo "::error::probe test did not run"; exit 1; }
+            resolves)
+              test "$result" = 'RESULT: None' || { echo "::error::expected the probe to resolve"; exit 1; }
               ;;
             probe-fails)
-              test "$exit_code" != 0 || { echo "::error::expected a failure on Iceberg 1.12"; exit 1; }
-              grep -qF "$probe *** FAILED" mvn.log || { echo "::error::probe test did not fail"; exit 1; }
-              grep -qF "$msg" mvn.log || { echo "::error::failure message differs from the issue"; exit 1; }
-              echo "Reproduced: probe test failed with: $msg"
-              others=$(grep -F '*** FAILED' mvn.log | grep -vF "$probe" || true)
-              if [ -n "$others" ]; then echo "::error::unrelated failures:"; echo "$others"; exit 1; fi
-              grep -qE 'Tests: succeeded [0-9]+, failed 1,' mvn.log || { echo "::error::expected exactly one failure"; exit 1; }
+              test "$result" = "RESULT: $msg" || { echo "::error::probe result differs from the issue"; exit 1; }
+              echo "Reproduced: $msg"
               ;;
           esac
 
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: mvn-log-iceberg-${{ matrix.iceberg }}
+          name: logs-iceberg-${{ matrix.iceberg }}
           path: |
             mvn.log
-            spark/target/surefire-reports/
+            javap.txt
+            probe.log
+            spark/cp.txt
           if-no-files-found: ignore
           retention-days: 7
