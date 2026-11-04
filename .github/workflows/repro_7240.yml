@@ -94,7 +94,8 @@ jobs:
           # The spark-4.1 profile is the only place spark/pom.xml pins 1.11.0.
           test "$(grep -c '<version>1.11.0</version>' spark/pom.xml)" = 1
           sed -i 's#<version>1.11.0</version>#<version>${{ matrix.iceberg }}</version>#' spark/pom.xml
-          git --no-pager diff spark/pom.xml
+          # git does not treat the container checkout as a repository, so show the result with grep.
+          grep -n '<version>${{ matrix.iceberg }}</version>' spark/pom.xml
 
       - name: Run IcebergReflectionSuite
         id: run
