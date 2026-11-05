@@ -1,0 +1,381 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Fork-only workflow verifying the fix for apache/datafusion-comet#7240. Not intended for
+# upstream. It runs only the Iceberg-related CI:
+#
+#   iceberg-suites   Comet's Iceberg suites on every Spark profile, i.e. on every pinned
+#                    Iceberg version (1.5.2, 1.8.1, 1.10.0, 1.11.0), the same suites and
+#                    profiles as pr_build_linux.yml.
+#   iceberg_1_*      Iceberg's own Spark tests with Comet, as ci.yml runs them.
+#   iceberg-1-12     Spark 4.1 with Iceberg 1.12.0, which no profile pins: the executor
+#                    reflection probe plus native writes end to end. The `fix` leg runs this
+#                    branch and must write natively; the `base` leg runs upstream main and must
+#                    fall back, which shows the check detects the bug.
+
+name: Verify 7240 fix (Iceberg)
+
+on:
+  push:
+    branches:
+      - 'tlfua/ci/7240-fix-verify'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUST_VERSION: stable
+  RUST_BACKTRACE: 1
+  RUSTFLAGS: "-Clink-arg=-fuse-ld=bfd"
+  # The upstream main commit the fix branch is based on.
+  BASE_SHA: b82f5eaffa8e2461e8763259bce20260f2ab8fb1
+
+jobs:
+  build-native:
+    name: Build Native Library
+    runs-on: ubuntu-24.04
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          jdk-version: 17
+
+      - name: Restore Cargo cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/target
+          key: ${{ runner.os }}-cargo-ci-${{ hashFiles('native/**/Cargo.lock', 'native/**/Cargo.toml') }}
+
+      - name: Build native library (CI profile)
+        run: |
+          cd native
+          cargo build --profile ci
+        env:
+          RUSTFLAGS: "-Ctarget-cpu=x86-64-v3 -Clink-arg=-fuse-ld=bfd"
+
+      - name: Upload native library
+        uses: ./.github/actions/upload-artifact-retry
+        with:
+          name: native-lib-linux
+          path: |
+            native/target/ci/libcomet.so
+            native/target/ci/libcomet_test_udfs.so
+          retention-days: 3
+
+  iceberg-suites:
+    needs: build-native
+    name: ${{ matrix.profile.name }} [iceberg]
+    runs-on: ubuntu-24.04
+    container:
+      image: amd64/rust
+      env:
+        JAVA_TOOL_OPTIONS: '--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-exports=java.base/sun.util.calendar=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED'
+    strategy:
+      fail-fast: false
+      matrix:
+        # Copied from dev/ci/linux-test-profiles.py.
+        profile:
+          - {name: "Spark 3.4, JDK 17, Scala 2.12", java_version: "17", maven_opts: "-Pspark-3.4 -Pscala-2.12"}
+          - {name: "Spark 3.5, JDK 17, Scala 2.13", java_version: "17", maven_opts: "-Pspark-3.5 -Pscala-2.13"}
+          - {name: "Spark 4.0, JDK 21", java_version: "21", maven_opts: "-Pspark-4.0"}
+          - {name: "Spark 4.1, JDK 17", java_version: "17", maven_opts: "-Pspark-4.1"}
+          - {name: "Spark 4.2, JDK 17", java_version: "17", maven_opts: "-Pspark-4.2"}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          jdk-version: ${{ matrix.profile.java_version }}
+
+      - name: Download native library
+        uses: ./.github/actions/download-artifact-retry
+        with:
+          name: native-lib-linux
+          path: native/target/release/
+
+      - name: Java test steps
+        uses: ./.github/actions/java-test
+        with:
+          artifact_name: ${{ matrix.profile.name }}-iceberg-${{ github.run_id }}-${{ github.run_attempt }}
+          # The Iceberg suites of pr_build_linux.yml.
+          suites: |
+            org.apache.comet.CometIcebergNativeSuite
+            org.apache.comet.CometIcebergEncryptionSuite
+            org.apache.comet.CometIcebergRewriteActionSuite
+            org.apache.comet.CometIcebergWriteActionSuite
+            org.apache.comet.CometIcebergWriteDetectionSuite
+            org.apache.comet.CometIcebergSystemFunctionSuite
+            org.apache.comet.CometIcebergSystemFunctionExtensionsSuite
+            org.apache.comet.CometIcebergResidualPushdownSuite
+            org.apache.comet.iceberg.IcebergReflectionSuite
+            org.apache.comet.serde.operator.IcebergWriteProtoTranslationSuite
+            org.apache.comet.serde.operator.CometIcebergNativeScanSuite
+            org.apache.comet.CometFuzzIcebergSuite
+          maven_opts: ${{ matrix.profile.maven_opts }}
+          upload-test-reports: true
+          skip-native-build: true
+
+  iceberg_1_8:
+    name: Iceberg Spark SQL Tests (Iceberg 1.8)
+    uses: ./.github/workflows/iceberg_spark_test_reusable.yml
+    with:
+      iceberg-short: '1.8'
+      iceberg-full: '1.8.1'
+      spark-short: '3.4'
+      spark-full: '3.4.3'
+      java: 17
+
+  iceberg_1_9:
+    name: Iceberg Spark SQL Tests (Iceberg 1.9)
+    uses: ./.github/workflows/iceberg_spark_test_reusable.yml
+    with:
+      iceberg-short: '1.9'
+      iceberg-full: '1.9.1'
+      spark-short: '3.5'
+      spark-full: '3.5.9'
+      java: 17
+
+  iceberg_1_10:
+    name: Iceberg Spark SQL Tests (Iceberg 1.10)
+    uses: ./.github/workflows/iceberg_spark_test_reusable.yml
+    with:
+      iceberg-short: '1.10'
+      iceberg-full: '1.10.0'
+      spark-short: '3.5'
+      spark-full: '3.5.9'
+      java: 17
+
+  iceberg_1_11:
+    name: Iceberg Spark SQL Tests (Iceberg 1.11)
+    uses: ./.github/workflows/iceberg_spark_test_reusable.yml
+    with:
+      iceberg-short: '1.11'
+      iceberg-full: '1.11.0'
+      spark-short: '4.1'
+      spark-full: '4.1.3'
+      java: 17
+
+  iceberg-1-12:
+    needs: build-native
+    name: Spark 4.1, Iceberg 1.12.0 [${{ matrix.source }}]
+    runs-on: ubuntu-24.04
+    container:
+      image: amd64/rust
+      env:
+        JAVA_TOOL_OPTIONS: '--add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-exports=java.base/sun.util.calendar=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED'
+    strategy:
+      fail-fast: false
+      matrix:
+        source: [fix, base]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.source == 'base' && env.BASE_SHA || github.sha }}
+      - uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          jdk-version: 17
+
+      # The native code is the same on both legs; only the Scala differs.
+      - name: Download native library
+        uses: ./.github/actions/download-artifact-retry
+        with:
+          name: native-lib-linux
+          path: native/target/release/
+
+      - name: Pin Iceberg 1.12.0 in the spark-4.1 profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The spark-4.1 profile is the only place spark/pom.xml pins 1.11.0.
+          test "$(grep -c '<version>1.11.0</version>' spark/pom.xml)" = 1
+          sed -i 's#<version>1.11.0</version>#<version>1.12.0</version>#' spark/pom.xml
+          grep -n '<version>1.12.0</version>' spark/pom.xml
+
+      # Comet's test sources do not compile against Iceberg 1.12 (a `getConf` override in
+      # CometIcebergWriteDetectionSuite, REST API changes in RESTCatalogAdapter), so this builds
+      # the main sources only and drives them from a small program.
+      - name: Compile main sources and write the classpath
+        shell: bash
+        run: |
+          set -euo pipefail
+          MAVEN_OPTS="-Xmx4G -Xms2G" ./mvnw -B -Prelease -Pspark-4.1 -Dmaven.test.skip=true \
+            compile dependency:build-classpath -Dmdep.includeScope=test -Dmdep.outputFile=cp.txt \
+            2>&1 | tee mvn.log
+          test -s spark/cp.txt
+          find spark/target/classes -name 'libcomet.so' | grep -q . \
+            || { echo "::error::libcomet.so is not on the classpath"; exit 1; }
+
+      - name: List ManifestFiles.read overloads in the resolved runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          jar=$(tr ':' '\n' < spark/cp.txt | grep '/iceberg-spark-runtime-4.1_2.13/')
+          echo "$jar" | tee javap.txt
+          case "$jar" in */1.12.0/*) ;; *) echo "::error::not Iceberg 1.12.0"; exit 1 ;; esac
+          javap -cp "$jar" org.apache.iceberg.ManifestFiles | grep ' read(' | tee -a javap.txt
+
+      - name: Run the probe and native writes end to end
+        shell: bash
+        env:
+          SPARK_LOCAL_HOSTNAME: localhost
+          SPARK_LOCAL_IP: 127.0.0.1
+        run: |
+          set -euo pipefail
+          mkdir -p e2e
+          cat > e2e/E2E.java <<'JAVA'
+          import java.util.List;
+          import java.util.concurrent.CopyOnWriteArrayList;
+          import java.util.stream.Collectors;
+          import org.apache.spark.sql.Row;
+          import org.apache.spark.sql.SparkSession;
+          import org.apache.spark.sql.execution.QueryExecution;
+          import org.apache.spark.sql.util.QueryExecutionListener;
+
+          public class E2E {
+            /** Registered through spark.sql.queryExecutionListeners. */
+            public static class Capture implements QueryExecutionListener {
+              static final List<String> PLANS = new CopyOnWriteArrayList<>();
+
+              @Override
+              public void onSuccess(String funcName, QueryExecution qe, long durationNs) {
+                PLANS.add(qe.executedPlan().toString());
+              }
+
+              @Override
+              public void onFailure(String funcName, QueryExecution qe, Exception exception) {}
+            }
+
+            static SparkSession spark;
+            static boolean fixed;
+            static int failures = 0;
+
+            public static void main(String[] args) throws Exception {
+              String warehouse = args[0];
+              fixed = args[1].equals("fix");
+
+              String probe =
+                  org.apache.comet.iceberg.IcebergReflection.executorReflectionUnresolved().toString();
+              System.out.println("PROBE=" + probe);
+              String missingRead =
+                  "NoSuchMethodException: org.apache.iceberg.ManifestFiles.read("
+                      + "org.apache.iceberg.ManifestFile,org.apache.iceberg.io.FileIO)";
+              expect("probe", fixed ? probe.equals("None") : probe.contains(missingRead));
+
+              spark =
+                  SparkSession.builder()
+                      .master("local[2]")
+                      .appName("verify-7240")
+                      .config("spark.ui.enabled", "false")
+                      .config("spark.sql.extensions",
+                          "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
+                      .config("spark.plugins", "org.apache.spark.CometPlugin")
+                      .config("spark.shuffle.manager",
+                          "org.apache.spark.sql.comet.execution.shuffle.CometShuffleManager")
+                      .config("spark.memory.offHeap.enabled", "true")
+                      .config("spark.memory.offHeap.size", "2g")
+                      .config("spark.comet.enabled", "true")
+                      .config("spark.comet.exec.enabled", "true")
+                      .config("spark.comet.exec.localTableScan.enabled", "true")
+                      .config("spark.comet.write.iceberg.splitOperator.enabled", "true")
+                      .config("spark.comet.write.iceberg.enabled", "true")
+                      .config("spark.sql.queryExecutionListeners", Capture.class.getName())
+                      .config("spark.sql.catalog.cat", "org.apache.iceberg.spark.SparkCatalog")
+                      .config("spark.sql.catalog.cat.type", "hadoop")
+                      .config("spark.sql.catalog.cat.warehouse", warehouse)
+                      .getOrCreate();
+
+              // Format version 2, written under spec id 1 after partition evolution.
+              spark.sql("CREATE TABLE cat.db.v2 (id BIGINT, category STRING) USING iceberg "
+                  + "TBLPROPERTIES ('format-version'='2')");
+              spark.sql("ALTER TABLE cat.db.v2 ADD PARTITION FIELD category");
+              insert("v2", "INSERT INTO cat.db.v2 VALUES (1, 'a'), (2, 'b'), (3, 'a')");
+              expectRows("v2 rows", "SELECT id, category FROM cat.db.v2 ORDER BY id",
+                  "[1,a];[2,b];[3,a]");
+              expectRows("v2 pruned read", "SELECT id FROM cat.db.v2 WHERE category = 'a' ORDER BY id",
+                  "[1];[3]");
+              expectRows("v2 file spec ids", "SELECT DISTINCT spec_id FROM cat.db.v2.files", "[1]");
+              expectRows("v2 file partitions",
+                  "SELECT DISTINCT partition.category FROM cat.db.v2.files ORDER BY 1", "[a];[b]");
+
+              // Format version 1 whose only partition field was dropped: a void-only spec, id 1, for
+              // which the native writer embeds a spec with no fields in the task manifest.
+              spark.sql("CREATE TABLE cat.db.v1 (id BIGINT, category STRING) USING iceberg "
+                  + "PARTITIONED BY (category) TBLPROPERTIES ('format-version'='1')");
+              spark.sql("ALTER TABLE cat.db.v1 DROP PARTITION FIELD category");
+              insert("v1", "INSERT INTO cat.db.v1 VALUES (1, 'a'), (2, 'b')");
+              expectRows("v1 rows", "SELECT id, category FROM cat.db.v1 ORDER BY id", "[1,a];[2,b]");
+              expectRows("v1 file spec ids", "SELECT DISTINCT spec_id FROM cat.db.v1.files", "[1]");
+
+              spark.stop();
+              System.out.println(failures == 0 ? "VERDICT=PASS" : "VERDICT=FAIL (" + failures + ")");
+              System.exit(failures == 0 ? 0 : 1);
+            }
+
+            /** Runs one write and checks whether Comet's native Iceberg writer ran it. */
+            static void insert(String name, String sql) throws Exception {
+              spark.sparkContext().listenerBus().waitUntilEmpty();
+              Capture.PLANS.clear();
+              spark.sql(sql);
+              spark.sparkContext().listenerBus().waitUntilEmpty();
+              Capture.PLANS.forEach(p -> System.out.println("PLAN " + name + ":\n" + p));
+              boolean nativeWrite = Capture.PLANS.stream().anyMatch(p -> p.contains("CometIcebergWrite"));
+              boolean writeCaptured =
+                  Capture.PLANS.stream()
+                      .anyMatch(p -> p.contains("IcebergWrite") || p.contains("AppendData"));
+              System.out.println("NATIVE " + name + "=" + nativeWrite);
+              expect(name + " plan was captured", writeCaptured);
+              expect(name + (fixed ? " writes natively" : " falls back"), nativeWrite == fixed);
+            }
+
+            static void expectRows(String name, String sql, String expected) {
+              String actual =
+                  spark.sql(sql).collectAsList().stream()
+                      .map(Row::toString)
+                      .collect(Collectors.joining(";"));
+              System.out.println("ROWS " + name + "=" + actual);
+              expect(name + " = " + expected, actual.equals(expected));
+            }
+
+            static void expect(String what, boolean ok) {
+              System.out.println((ok ? "OK    " : "FAIL  ") + what);
+              if (!ok) failures++;
+            }
+          }
+          JAVA
+          cp="spark/target/classes:common/target/classes:$(cat spark/cp.txt)"
+          javac -cp "$cp" -d e2e e2e/E2E.java
+          warehouse=$(mktemp -d)
+          java -Xmx3g -cp "e2e:$cp" E2E "$warehouse" '${{ matrix.source }}' 2>&1 | tee e2e.log
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: iceberg-1.12-${{ matrix.source }}
+          path: |
+            mvn.log
+            javap.txt
+            e2e.log
+          if-no-files-found: ignore
+          retention-days: 7
