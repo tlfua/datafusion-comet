@@ -350,8 +350,14 @@ impl Arg {
         let Some((projection, projected)) = &self.masked else {
             return self.expr.evaluate(batch);
         };
-        let worth_trying =
-            nulls.is_some_and(|nulls| self.cheap || nulls.null_count() * 2 <= nulls.len());
+        // TEMPORARY benchmark toggle, never merged: 1 always speculates, 0 never does
+        static MODE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        let mode = MODE.get_or_init(|| std::env::var("COMET_NSC_SPECULATE").unwrap_or_default());
+        let worth_trying = nulls.is_some_and(|nulls| match mode.as_str() {
+            "1" => true,
+            "0" => false,
+            _ => self.cheap || nulls.null_count() * 2 <= nulls.len(),
+        });
         if worth_trying && self.speculate.load(Ordering::Relaxed) {
             if let Ok(value) = evaluate_projected(projection, projected, batch, None) {
                 return Ok(value);

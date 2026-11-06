@@ -1,0 +1,28 @@
+# Temporary benchmark for https://github.com/apache/datafusion-comet/pull/7456, never merged
+name: bench-7246
+on:
+  push:
+    branches: [bench/7246]
+permissions:
+  contents: read
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        run: sudo apt-get update -q && sudo apt-get install -yq protobuf-compiler
+      - name: Build benchmark
+        working-directory: native
+        run: cargo bench -p datafusion-comet-spark-expr --bench null_short_circuit --no-run
+      - name: Run benchmark
+        working-directory: native
+        run: |
+          for round in 1 2; do
+            for speculate in policy 1 0; do
+              echo "=== round=$round speculate=$speculate"
+              COMET_NSC_SPECULATE=$speculate cargo bench -p datafusion-comet-spark-expr \
+                --bench null_short_circuit -- --warm-up-time 1 --measurement-time 4 \
+                --output-format bencher 2>/dev/null | grep '^test '
+            done
+          done
