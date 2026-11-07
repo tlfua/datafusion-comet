@@ -31,6 +31,10 @@ under the License.
 - 開始實作一個新的 PR。
 - 在進行中的 PR 處理一輪 review comments（一個 cycle）。
 
+## 目標
+
+**用最少的 review cycle 讓目前的 PR merge。** 每一步都以這個為準：一次把所有決定要處理的 comment 都處理到位，push 前檢查仔細，不要讓 reviewer 再為同一件事回來留言，也不要引入新的爭議點。
+
 ## 第 0 步：先確認，不要沒頭沒腦直接 output
 
 產生 detailed steps 之前，必須先往前看這個 session 的 logs，確認下面幾點都已經跟 user 討論過、有明確結論：
@@ -40,6 +44,13 @@ under the License.
 3. user 有沒有特別交代的限制（例如「不 merge upstream/main」、「這點我要親自處理」）。
 
 任何一點不清楚，就停下來問 user，不要自己猜，也不要直接產生 steps。
+
+### reviewer 的 comments 互相衝突時
+
+- 先把衝突點講清楚給 user：誰說了什麼（附 comment 的完整 URL），兩邊的理由，以及各自的擔心。
+- 盡量找出一條大家都能接受的路，例如同時滿足兩邊核心擔心的設計、加開關或門檻、用 benchmark 數據說話，或是把有爭議的部分拆成 follow-up issue。
+- 參考 repo 的歷史：用 `gh` 搜 apache/datafusion-comet 過去類似的 PR 或 issue 討論，看之前是怎麼解決的，例如由哪位 maintainer 拍板、用什麼數據說服對方，並附完整 URL 當依據。
+- 提出建議方案和依據，等 user 決定後才寫進 steps。回覆 reviewer 時，要同時對兩邊說明為什麼這樣選。
 
 ## 固定規則（每次都適用，不用等 user 重複講）
 
@@ -116,17 +127,25 @@ under the License.
 1. **Code 修改**：每個 review point 或子問題各一步，寫明誰提的、改哪個檔案、怎麼改、要補的測試。新行為先寫測試，確認修改前會失敗（Rust 單元測試在本機跑；SQL 測試只能靠 fork CI，就先在 review 時確認測試能抓到原本的問題）。
 2. **Rust 單元測試和 benchmark 程式碼**（有需要時）：要補的 case 和 benchmark 形狀。
 3. **SQL 測試**：要加的查詢、資料表，以及預期是 native 還是 fallback。
-4. **`cargo fmt`（有改 Scala 就 `make format`）後做 review**：先自己看過整份 diff，再交給 rubber-duck，範圍是這個 PR 所有的 review points；發現問題就修；同時清掉 dead code。
-5. **本機靜態檢查**：只編有改到的 crate，跑 clippy、單元測試、`cargo bench --no-run`。不跑 `./mvnw install` 和整套 JVM 測試，Maven 不用 `-pl`。
-6. **fork 實驗**（有需要時）：例如在 `bench/<issue>` 跑 benchmark，用數據做決定；結果改變 code 的話回到第 4 步。跑完不要刪。
-7. **Commit 並 push**：等 fork CI（約 70 分鐘，每 2 分鐘檢查一次），失敗就修，修完重做第 4、5 步再 push。
-8. **Follow-up issue / backport tracking issue**（有需要時，包括 reviewer 要求另開的 issue）：草稿經 user 確認後才建立。這一步只記下 issue 的完整 URL，不回覆 reviewer。
-9. **更新 PR 並回覆 reviewer**：逐一回覆每個 comment，每個 comment 只回一次，附上 commit 和 CI/benchmark 的 link；要求另開 issue 的 comment，在同一則回覆裡附上 issue 的完整 URL。更新 PR 說明；需要時請維護者加 `run-*` 或 `run-benchmark-check` label；新 PR 從 draft 轉成 ready（先確認 non-draft PR 數量沒超過上限）。
-10. **收尾**：把 session todo 標成完成，確認 worktree 乾淨，給 user 看 updated PR 的 link。
+4. **`cargo fmt`（有改 Scala 就 `make format`）後做 review**：先自己看過整份 diff，再交給 rubber-duck，範圍是這個 PR 所有的 review points（清單以第 5 步抓下來的 comments 為準）；發現問題就修；同時清掉 dead code。
+5. **Comment coverage verify**：當下往前看，用 `gh` 重新抓這個 PR 所有的 comments，不要只靠記憶：
+   - inline review comments：`gh api --paginate repos/apache/datafusion-comet/pulls/<N>/comments`
+   - PR 下方的一般 comments：`gh api --paginate repos/apache/datafusion-comet/issues/<N>/comments`
+   - review 本文（approve / request changes 附的文字）：`gh api --paginate repos/apache/datafusion-comet/pulls/<N>/reviews`
+   - thread 是否 resolved 以 GraphQL `reviewThreads { isResolved isOutdated }` 為準；`isOutdated` 的 thread 也要看是否仍適用。bot 留言只在有實質要求時列入。
+
+   列一張表：每個 comment（附完整 URL）、處理方式（在這個 PR 修／另開 issue／不處理和原因）、對應的 diff 或測試。**處理方式只能沿用第 0 步和 user 已確認的結論**；steps 確認後才出現的新 comment，或沒被 user 決定過的 comment，停下來列給 user，等 user 決定，不要自己補修。已確認要處理卻漏掉的才補，衝突的 comments 也要照第 0 步的方案處理；有補就回到第 4 步。
+
+6. **本機靜態檢查**：只編有改到的 crate，跑 clippy、單元測試、`cargo bench --no-run`。不跑 `./mvnw install` 和整套 JVM 測試，Maven 不用 `-pl`。
+7. **fork 實驗**（有需要時）：例如在 `bench/<issue>` 跑 benchmark，用數據做決定；結果改變 code 的話重做第 4–6 步，接著直接進第 8 步（只有效能行為又改變時才重跑實驗）。跑完不要刪。
+8. **Commit 並 push**：等 fork CI（約 70 分鐘，每 2 分鐘檢查一次），失敗就修，修完重做第 4–6 步再 push。
+9. **Follow-up issue / backport tracking issue**（有需要時，包括 reviewer 要求另開的 issue）：草稿經 user 確認後才建立。這一步只記下 issue 的完整 URL，不回覆 reviewer。
+10. **更新 PR 並回覆 reviewer**：回覆前照第 5 步的做法再抓一次 comments，跟第 5 步的表比對（CI 跑的這段時間可能有新 comment）。有新增或被修改的 comment，先停下來給 user 看，需要改 code 就回到第 4 步，不要直接回覆。沒有差異才照表逐一回覆每個 comment，每個 comment 只回一次，附上 commit 和 CI/benchmark 的 link；要求另開 issue 的 comment，在同一則回覆裡附上 issue 的完整 URL。更新 PR 說明；需要時請維護者加 `run-*` 或 `run-benchmark-check` label；新 PR 從 draft 轉成 ready（先確認 non-draft PR 數量沒超過上限）。
+11. **收尾**：把 session todo 標成完成，確認 worktree 乾淨，給 user 看 updated PR 的 link。
 
 ## 範例
 
-apache/datafusion-comet#7246（ANSI short-circuit，處理 rich7420 和 coderfender 的 comments）這一輪產生的 detailed steps。這裡把 template 的第 1 步拆成兩步，所以編號比 template 多一號，例如「回到第 5 步」對應 template 的第 4 步：
+apache/datafusion-comet#7246（ANSI short-circuit，處理 rich7420 和 coderfender 的 comments）這一輪產生的 detailed steps。這個範例比 comment coverage verify 步驟早，所以沒有那一步；而且它把 template 的第 1 步拆成兩步，所以範例的編號跟 template 對不上。範例裡的「回到第 N 步」指的是範例自己的編號：
 
 0. 準備：確認沒有其他編譯在跑，分支停在乾淨的 `dc1559ce8`。全程不 merge upstream/main。
 1. rich7420 的修正：`is_deterministic` 直接回傳 `is_deterministic(n.inner())`，加巢狀測試。
