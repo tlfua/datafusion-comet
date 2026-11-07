@@ -26,6 +26,16 @@ under the License.
 
 寫作規則：用中文（台灣）描述，關鍵字和術語保留英文（例如 row、col、diff、commit、push、PR、CI、benchmark、backport）。連結一律用完整 URL，不要寫裸的 `#N`（在 fork 裡會連到錯的地方）。
 
+## 連結一定要是合法、點得開的 hyperlink（user 一再提醒，最高優先）
+
+不管是給 user 看的 steps、回覆，還是寫進 PR、issue、commit message 的內容，都要遵守：
+
+- **一律寫完整 URL**，例如 `https://github.com/apache/datafusion-comet/pull/7246`。不要寫裸的 `#N`、`PR 7246`、`issue 123`、只有 commit hash 或檔名這類點不開的寫法。真的要用簡寫時，只能用 `apache/datafusion-comet#7246` 這種 owner/repo#N 形式。
+- **不要自己拼 URL**。comment、review、CI run、commit 的 URL 要從 `gh` 的輸出拿（例如 `html_url`、`url` 欄位，或 `gh run list --json url`），不能用猜的 id 或 anchor 自己組。
+- **upstream 和 fork 不要搞混**：PR、issue、reviewer comment 在 `apache/datafusion-comet`；fork CI run、`bench/<issue>` branch、還沒進 upstream 的 commit 在 `tlfua/datafusion-comet`。commit link 要指到這個 commit 真的存在的 repo。
+- **輸出前逐一核實**：每個 link 都用 `gh api`、`gh pr view`、`gh run view` 或 `curl -sI` 確認存在，不是 404。核實不了的 link 不要放，跟 user 說明。
+- 在終端機給 user 看的 link 要能直接點：URL 前後不要黏上中文標點或括號，或改用 markdown `[文字](URL)`。
+
 ## 什麼時候用
 
 - 開始實作一個新的 PR。
@@ -140,8 +150,8 @@ under the License.
 7. **fork 實驗**（有需要時）：例如在 `bench/<issue>` 跑 benchmark，用數據做決定；結果改變 code 的話重做第 4–6 步，接著直接進第 8 步（只有效能行為又改變時才重跑實驗）。跑完不要刪。
 8. **Commit 並 push**：等 fork CI（約 70 分鐘，每 2 分鐘檢查一次），失敗就修，修完重做第 4–6 步再 push。
 9. **Follow-up issue / backport tracking issue**（有需要時，包括 reviewer 要求另開的 issue）：草稿經 user 確認後才建立。這一步只記下 issue 的完整 URL，不回覆 reviewer。
-10. **更新 PR 並回覆 reviewer**：回覆前照第 5 步的做法再抓一次 comments，跟第 5 步的表比對（CI 跑的這段時間可能有新 comment）。有新增或被修改的 comment，先停下來給 user 看，需要改 code 就回到第 4 步，不要直接回覆。沒有差異才照表逐一回覆每個 comment，每個 comment 只回一次，附上 commit 和 CI/benchmark 的 link；要求另開 issue 的 comment，在同一則回覆裡附上 issue 的完整 URL。更新 PR 說明；需要時請維護者加 `run-*` 或 `run-benchmark-check` label；新 PR 從 draft 轉成 ready（先確認 non-draft PR 數量沒超過上限）。
-11. **收尾**：把 session todo 標成完成，確認 worktree 乾淨，給 user 看 updated PR 的 link。
+10. **更新 PR 並回覆 reviewer**：回覆前照第 5 步的做法再抓一次 comments，跟第 5 步的表比對（CI 跑的這段時間可能有新 comment）。有新增或被修改的 comment，先停下來給 user 看，需要改 code 就回到第 4 步，不要直接回覆。沒有差異才照表逐一回覆每個 comment，每個 comment 只回一次，附上 commit 和 CI/benchmark 的 link；要求另開 issue 的 comment，在同一則回覆裡附上 issue 的完整 URL。更新 PR 說明；需要時請維護者加 `run-*` 或 `run-benchmark-check` label；新 PR 從 draft 轉成 ready（先確認 non-draft PR 數量沒超過上限）。送出前照「連結一定要是合法、點得開的 hyperlink」那節逐一核實每個 link。
+11. **收尾**：把 session todo 標成完成，確認 worktree 乾淨，給 user 看 updated PR 的完整 URL（核實過、點得開）。
 
 ## 範例
 
