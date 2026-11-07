@@ -62,14 +62,14 @@ under the License.
 
 這台機器只有 8 GB 記憶體，重量級 build 會把機器拖垮。
 
-| 項目 | 在哪跑 |
-|---|---|
-| `cargo fmt`、`cargo clippy -p <crate>`、`cargo test -p <crate>`、`cargo bench --no-run` | 本機，只編有改到的 crate（例如 `native/spark-expr`），`CARGO_BUILD_JOBS=4` |
-| 有改 Scala 時：`make format`（會跑 Maven compile、scalafix、`spotless:apply`） | 本機，只有這種輕量 Maven goal |
-| `./mvnw install`、`CometSqlFileTestSuite`、整套 JVM 測試、SQL 檔測試 | **不在本機跑**，交給 fork CI |
-| 整個 native workspace 的 Rust 測試、TPC-H/TPC-DS 結果驗證 | fork CI |
-| benchmark（需要穩定數字或比較多種策略） | fork 上另寫 workflow 跑 |
-| 其他 Spark profile、Spark SQL suite、Iceberg 其他版本 | fork CI 只跑預設 Spark profile 和 lint；其他的要請維護者在 upstream PR 加 `run-*` label（見 `docs/source/contributor-guide/ci.md`） |
+| 項目                                                                                    | 在哪跑                                                                                                                              |
+| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt`、`cargo clippy -p <crate>`、`cargo test -p <crate>`、`cargo bench --no-run` | 本機，只編有改到的 crate（例如 `native/spark-expr`），`CARGO_BUILD_JOBS=4`                                                          |
+| 有改 Scala 時：`make format`（會跑 Maven compile、scalafix、`spotless:apply`）          | 本機，只有這種輕量 Maven goal                                                                                                       |
+| `./mvnw install`、`CometSqlFileTestSuite`、整套 JVM 測試、SQL 檔測試                    | **不在本機跑**，交給 fork CI                                                                                                        |
+| 整個 native workspace 的 Rust 測試、TPC-H/TPC-DS 結果驗證                               | fork CI                                                                                                                             |
+| benchmark（需要穩定數字或比較多種策略）                                                 | fork 上另寫 workflow 跑                                                                                                             |
+| 其他 Spark profile、Spark SQL suite、Iceberg 其他版本                                   | fork CI 只跑預設 Spark profile 和 lint；其他的要請維護者在 upstream PR 加 `run-*` label（見 `docs/source/contributor-guide/ci.md`） |
 
 - Maven 一律從 repo root 跑，**絕對不要用 `-pl`**（見 `development.md` 的「Never Use `-pl` to Select Modules」）。
 - 本機編譯之前，先檢查其他 session 有沒有正在編譯，有的話錯開，避免記憶體不足。
