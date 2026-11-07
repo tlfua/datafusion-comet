@@ -90,13 +90,15 @@ under the License.
 - PR 改到 benchmark 原始碼（例如 `native/spark-expr/benches/`）時，請維護者加 `run-benchmark-check` label。
 - PR 說明照 `.github/pull_request_template.md` 填完每一段，並參考最近幾個一次就被 approve 的相關 PR 的寫法。
 - 寫進 PR 或 issue 的每個說法和 link 都要先核實，不能只憑推測。
-- 需要另開的 follow-up issue：先搜有沒有 existing issue，照 repo 的 issue template 開，再把完整 URL 附到 PR 或測試註解。
-- **reviewer 要求（或建議）另開 follow-up issue 時**：
-  - 這個 PR 的 scope 維持不變，不要順手把 follow-up 一起修進來。
+- **Follow-up issue**（自己發現的，或 reviewer 要求、建議另開的）：
+  - **先確認 reviewer 的意思**：是要另開 issue，還是要在這個 PR 修？不確定就問 user。reviewer 只是「建議」另開時，先問 user 要不要開，不要預設就開。
+  - 確定另開的話，這個 PR 的 scope 維持不變，不要順手把 follow-up 一起修進來。
   - 在 steps 裡列成獨立一步，寫明是哪個 reviewer 的哪個 comment（附 comment 的完整 URL）。
-  - 在 apache/datafusion-comet 開 issue（不是 fork）：先搜 existing issue，有的話直接引用，不要重複開；沒有就照 `.github/ISSUE_TEMPLATE/` 選 bug 或 feature template，附可重現的 SQL、預期和實際結果，並連回這個 PR 和 reviewer 的 comment。只在 kernel 層級重現、沒實際跑過 SQL 的話，要照實寫出來。
-  - 在 reviewer 那個 comment 的 thread 裡回覆 issue 的完整 URL。如果測試或 code 裡留著已知的缺口，就在註解附上 issue 的 URL。
-  - PR 說明如果有「Out of scope / follow-up」之類的段落，也要附上 issue 的 link。
+  - 先搜 existing issue，有的話直接引用，不要重複開，這一步就改成「回覆既有 issue 的 URL，需要時在那個 issue 補留言」。
+  - 沒有的話在 apache/datafusion-comet 開（不是 fork）：依內容是 bug 還是 enhancement，選 `.github/ISSUE_TEMPLATE/` 的 `bug_report.yml` 或 `feature_request.yml`。Ryan 的標準比 template 嚴格：要附可重現的 SQL、預期和實際結果，並連回這個 PR 和 reviewer 的 comment。只在 kernel 層級重現、沒實際跑過 SQL 的話，要照實寫出來。
+  - **開 upstream issue 是公開動作**：標題和內文草稿要列在 steps 裡，等 user 確認後才建立。「Willingness to contribute」這類欄位要問 user，不要替 user 選。
+  - 不要自己加或移除 label（例如 `requires-triage`），triage 由 maintainer 做。
+  - 測試或 code 裡留著已知的缺口時，在註解附上 issue 的完整 URL；PR 說明如果有 follow-up 之類的段落，也附上 link。
 - fix 要進 release branch 時：照 `backporting.md` 用 `git cherry-pick -x` 開 backport PR，而且每個更新的 release branch 都要 backport。在 PR merge 之前，Ryan 的習慣是先開一個 backport tracking issue 記錄要 backport 的 branch（這是個人習慣，不是 repo guide 的要求）。
 
 ### 執行方式
@@ -117,8 +119,8 @@ under the License.
 5. **本機靜態檢查**：只編有改到的 crate，跑 clippy、單元測試、`cargo bench --no-run`。不跑 `./mvnw install` 和整套 JVM 測試，Maven 不用 `-pl`。
 6. **fork 實驗**（有需要時）：例如在 `bench/<issue>` 跑 benchmark，用數據做決定；結果改變 code 的話回到第 4 步。跑完不要刪。
 7. **Commit 並 push**：等 fork CI（約 70 分鐘，每 2 分鐘檢查一次），失敗就修，修完重做第 4、5 步再 push。
-8. **Follow-up issue / backport tracking issue**（有需要時，包括 reviewer 要求另開的 issue）：開好後在對應的 review thread 回覆 issue 的完整 URL。
-9. **更新 PR 並回覆 reviewer**：逐一回覆每個 comment，附上 commit 和 CI/benchmark 的 link；更新 PR 說明；需要時請維護者加 `run-*` 或 `run-benchmark-check` label；新 PR 從 draft 轉成 ready（先確認 non-draft PR 數量沒超過上限）。
+8. **Follow-up issue / backport tracking issue**（有需要時，包括 reviewer 要求另開的 issue）：草稿經 user 確認後才建立。這一步只記下 issue 的完整 URL，不回覆 reviewer。
+9. **更新 PR 並回覆 reviewer**：逐一回覆每個 comment，每個 comment 只回一次，附上 commit 和 CI/benchmark 的 link；要求另開 issue 的 comment，在同一則回覆裡附上 issue 的完整 URL。更新 PR 說明；需要時請維護者加 `run-*` 或 `run-benchmark-check` label；新 PR 從 draft 轉成 ready（先確認 non-draft PR 數量沒超過上限）。
 10. **收尾**：把 session todo 標成完成，確認 worktree 乾淨，給 user 看 updated PR 的 link。
 
 ## 範例
