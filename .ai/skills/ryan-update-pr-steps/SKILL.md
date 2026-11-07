@@ -24,17 +24,20 @@ under the License.
 
 # ryan-update-pr-steps
 
-寫作規則：用中文（台灣）描述，關鍵字和術語保留英文（例如 row、col、diff、commit、push、PR、CI、benchmark、backport）。連結一律用完整 URL，不要寫裸的 `#N`（在 fork 裡會連到錯的地方）。
+寫作規則：用中文（台灣）描述，關鍵字和術語保留英文（例如 row、col、diff、commit、push、PR、CI、benchmark、backport）。連結的規則見下一節。
 
 ## 連結一定要是合法、點得開的 hyperlink（user 一再提醒，最高優先）
 
 不管是給 user 看的 steps、回覆，還是寫進 PR、issue、commit message 的內容，都要遵守：
 
-- **一律寫完整 URL**，例如 `https://github.com/apache/datafusion-comet/pull/7246`。不要寫裸的 `#N`、`PR 7246`、`issue 123`、只有 commit hash 或檔名這類點不開的寫法。真的要用簡寫時，只能用 `apache/datafusion-comet#7246` 這種 owner/repo#N 形式。
+- **一律寫完整 URL**，例如 `https://github.com/apache/datafusion-comet/pull/7246`。不要寫裸的 `#N`、`PR 7246`、`issue 123`、只有 commit hash 或檔名這類點不開的寫法（裸的 `#N` 在 fork 裡會連到錯的地方）。只有寫進 GitHub 會 render 的內容（PR、issue、comment 本文）才可以用 `apache/datafusion-comet#7246` 這種簡寫；給 user 看的終端機輸出一律完整 URL，因為終端機不會把簡寫轉成 link。
 - **不要自己拼 URL**。comment、review、CI run、commit 的 URL 要從 `gh` 的輸出拿（例如 `html_url`、`url` 欄位，或 `gh run list --json url`），不能用猜的 id 或 anchor 自己組。
-- **upstream 和 fork 不要搞混**：PR、issue、reviewer comment 在 `apache/datafusion-comet`；fork CI run、`bench/<issue>` branch、還沒進 upstream 的 commit 在 `tlfua/datafusion-comet`。commit link 要指到這個 commit 真的存在的 repo。
-- **輸出前逐一核實**：每個 link 都用 `gh api`、`gh pr view`、`gh run view` 或 `curl -sI` 確認存在，不是 404。核實不了的 link 不要放，跟 user 說明。
-- 在終端機給 user 看的 link 要能直接點：URL 前後不要黏上中文標點或括號，或改用 markdown `[文字](URL)`。
+- **upstream 和 fork 不要搞混**：PR、issue、reviewer comment 在 `apache/datafusion-comet`；fork CI run、`bench/<issue>` branch、還沒進 upstream 的 commit 在 `tlfua/datafusion-comet`。commit link 要指到這個 commit 真的存在、而且已經 push 上去的 repo。
+- **commit**：一律用完整 URL `https://github.com/<owner>/<repo>/commit/<完整 40 字元 SHA>`，不要用短 SHA。commit message 不是 Markdown，只能放純 URL，不要用 `[文字](URL)`。
+- **檔案或行號**：用帶完整 commit SHA 的 permalink（`blob/<SHA>/path#L10-L20`），不要用 branch 名稱；SHA 用 `git rev-parse` 取得，而且要已經 push 到該 repo。
+- **fork 的 benchmark 結果**：優先用 run URL 或帶 SHA 的 link，不要只放 branch 名稱。
+- **輸出前逐一核實**：GitHub 的 link 用 `gh api`、`gh pr view`、`gh run view` 確認存在。`#discussion_r…`、`#issuecomment-…`、`#pullrequestreview-…` 這類 anchor，`curl` 驗不出來（anchor 不會送到 server），一律以 `gh api` 回傳的 `html_url` 為準（例如 `gh api repos/apache/datafusion-comet/pulls/comments/<id> --jq .html_url`；一般 comment 用 `issues/comments/<id>`，review 用 `pulls/<N>/reviews/<id>`）。`curl -sIL -o /dev/null -w '%{http_code}'` 只拿來驗非 GitHub 的公開網頁；回 404 或 429 可能是 private repo 或 rate limit，不能直接當成結論。核實不了的 link 不要放，跟 user 說明。
+- **終端機輸出**：URL 單獨一行，或後面接空白再接中文；前後不要黏上中文標點或括號。不要用 `[文字](URL)`，很多終端機不會 render；`[文字](URL)` 只用在寫進 GitHub 的內容。
 
 ## 什麼時候用
 
@@ -111,7 +114,7 @@ under the License.
 - 新 PR 先開 draft，fork CI 全過後才 publish。publish 前確認自己 open 的 non-draft PR 不超過 `development.md` 規定的上限（3 個）。
 - PR 改到 benchmark 原始碼（例如 `native/spark-expr/benches/`）時，請維護者加 `run-benchmark-check` label。
 - PR 說明照 `.github/pull_request_template.md` 填完每一段，並參考最近幾個一次就被 approve 的相關 PR 的寫法。
-- 寫進 PR 或 issue 的每個說法和 link 都要先核實，不能只憑推測。
+- 寫進 PR 或 issue 的每個說法都要先核實，不能只憑推測；link 的規則見「連結一定要是合法、點得開的 hyperlink」。
 - **Follow-up issue**（自己發現的，或 reviewer 要求、建議另開的）：
   - **先確認 reviewer 的意思**：是要另開 issue，還是要在這個 PR 修？不確定就問 user。reviewer 只是「建議」另開時，先問 user 要不要開，不要預設就開。
   - 確定另開的話，這個 PR 的 scope 維持不變，不要順手把 follow-up 一起修進來。
@@ -155,7 +158,7 @@ under the License.
 
 ## 範例
 
-apache/datafusion-comet#7246（ANSI short-circuit，處理 rich7420 和 coderfender 的 comments）這一輪產生的 detailed steps。這個範例比 comment coverage verify 步驟早，所以沒有那一步；而且它把 template 的第 1 步拆成兩步，所以範例的編號跟 template 對不上。範例裡的「回到第 N 步」指的是範例自己的編號：
+https://github.com/apache/datafusion-comet/pull/7246 （ANSI short-circuit，處理 rich7420 和 coderfender 的 comments）這一輪產生的 detailed steps。這個範例比 comment coverage verify 步驟早，所以沒有那一步；而且它把 template 的第 1 步拆成兩步，所以範例的編號跟 template 對不上。範例裡的「回到第 N 步」指的是範例自己的編號：
 
 0. 準備：確認沒有其他編譯在跑，分支停在乾淨的 `dc1559ce8`。全程不 merge upstream/main。
 1. rich7420 的修正：`is_deterministic` 直接回傳 `is_deterministic(n.inner())`，加巢狀測試。
