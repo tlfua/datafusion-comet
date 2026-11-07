@@ -118,8 +118,11 @@ fn order(n: usize, rev: bool) -> Vec<usize> {
     (0..n).map(|i| if rev { n - 1 - i } else { i }).collect()
 }
 
-/// Comet hll_sketch_agg: Partial accumulators per partition, state = to_sketch_bytes, Final
-/// accumulator starts from `SparkHllSketch::new(k)` and `merge_sketch`es each state.
+/// Comet hll_sketch_agg after apache/datafusion-comet#7345: Partial accumulators per partition
+/// (`HllSketchAccumulator::Sketch`), state = to_sketch_bytes. The Final accumulator starts as an
+/// empty `Sketch`, and its first `merge_batch` (`union_mut`) turns it into
+/// `SparkHllUnion::new(k)` with that empty sketch merged in. Every partial state is then merged
+/// into that one union, and `evaluate` returns `union.to_sketch_bytes()`.
 fn comet_sketch_agg(k: u8, kind: &str, seed: i64, start: i64, n: i64, p: i64, rev: bool) -> Vec<u8> {
     let mut partials = Vec::new();
     for q in 0..p {
@@ -129,12 +132,12 @@ fn comet_sketch_agg(k: u8, kind: &str, seed: i64, start: i64, n: i64, p: i64, re
         feed(&mut s, kind, seed, lo, hi);
         partials.push(s.to_sketch_bytes());
     }
-    let mut acc = SparkHllSketch::new(k);
+    let mut union = SparkHllUnion::new(k);
+    union.merge(&SparkHllSketch::new(k));
     for idx in order(p as usize, rev) {
-        let peer = SparkHllSketch::from_bytes(&partials[idx]).unwrap();
-        acc.merge_sketch(&peer);
+        union.merge(&SparkHllSketch::from_bytes(&partials[idx]).unwrap());
     }
-    acc.to_sketch_bytes()
+    union.to_sketch_bytes()
 }
 
 fn comet_estimate(bytes: &[u8]) -> Result<i64, String> {

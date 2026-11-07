@@ -2,12 +2,22 @@ name: hll-compare
 
 # Scratch experiment for https://github.com/apache/datafusion-comet/issues/7396 :
 # Spark 4.x HLL expressions on DataSketches-Java 6.1.1 / 6.2.0 vs Comet's native HLL
-# (datasketches crate 0.6.0) at apache/datafusion-comet@644a870.
+# (datasketches crate) at a chosen apache/datafusion-comet commit.
+# Rerun against a newer Comet: Actions > hll-compare > Run workflow, set comet_ref.
 
 on:
   push:
     branches: [tlfua/exp/7396-hll-compare]
   workflow_dispatch:
+    inputs:
+      comet_ref:
+        description: apache/datafusion-comet commit, tag or branch to compare
+        required: true
+        default: 8fc24a75292f345a59d6082b1e7568f33bf2ee3e
+
+env:
+  # push events have no inputs; default to the #7345 merge commit.
+  COMET_REF: ${{ inputs.comet_ref || '8fc24a75292f345a59d6082b1e7568f33bf2ee3e' }}
 
 jobs:
   compare:
@@ -19,7 +29,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: apache/datafusion-comet
-          ref: 644a8708839270d382a78715fca7e2b724143588
+          ref: ${{ env.COMET_REF }}
           path: comet
           sparse-checkout: native
 
@@ -49,11 +59,13 @@ jobs:
       - name: Build Comet HLL replayer
         run: |
           set -euo pipefail
+          echo "COMET_SHA=$(git -C comet rev-parse --short HEAD)" >> "$GITHUB_ENV"
           cp comet/native/Cargo.lock rust/Cargo.lock
           cd rust
           cargo build --release
           cargo tree -i datasketches --depth 0
           cargo tree -i datafusion-comet-spark-expr --depth 0
+          echo "DS_VER=$(cargo tree -i datasketches --depth 0 | head -1 | awk '{print $2}')" >> "$GITHUB_ENV"
 
       - name: Run comparison
         run: |
@@ -72,7 +84,7 @@ jobs:
             echo "::group::java $v verify"
             time java $JOPTS -cp "build/$v:$cp" HllSpark verify out/$v
             echo "::endgroup::"
-            python3 summarize.py out/$v "Spark mirror on datasketches-java $v vs Comet (datasketches 0.6.0)" | tee -a summary.md
+            python3 summarize.py out/$v "Spark mirror on datasketches-java $v vs Comet @ $COMET_SHA (datasketches $DS_VER)" | tee -a summary.md
           done
           {
             echo "## datasketches-java 6.1.1 vs 6.2.0 (Spark 4.0 vs 4.1/4.2)"
