@@ -97,7 +97,66 @@ under the License.
 | 其他 Spark profile、Spark SQL suite、Iceberg 其他版本                                    | fork CI 只跑預設 Spark profile 和 lint；其他的要請維護者在 upstream PR 加 `run-*` label（見 `docs/source/contributor-guide/ci.md`） |
 
 - Maven 一律從 repo root 跑，**絕對不要用 `-pl`**（見 `development.md` 的「Never Use `-pl` to Select Modules」）。
-- 本機編譯之前，先檢查其他 session 有沒有正在編譯，有的話錯開，避免記憶體不足。
+- 本機編譯一律透過 build lock，開工前先檢查 disk，見下一節。
+
+### 本機資源：disk 檢查和 build lock
+
+**disk 檢查**（第 0 步做一次，第 6 步不重查）：
+
+- 看剩餘空間（GB）：`df -g /Users/tien-lungfu/Desktop/RyanRepos | awk 'NR==2 {print $4}'`
+- 門檻：這輪要在本機編譯（有 `cargo build`、`cargo test`、`cargo clippy`、`cargo bench` 或 `make format`），剩不到 **20 GB** 就 hard stop；只改 code、push 給 fork CI，剩不到 **5 GB** 就 hard stop。
+- hard stop 時停下來通知 user，附上誰佔最多空間。兩個指令分開跑，因為 worktree 的總量已經包含它的 `native/target`，混在一起會重複計算：
+
+  ```sh
+  # 每個 worktree 的總量，加上 Maven 和 Rust 共用的 cache
+  du -sh /Users/tien-lungfu/Desktop/RyanRepos/datafusion-comet* ~/.m2 ~/.cargo 2>/dev/null | sort -h
+  # 其中各 worktree 的 Rust 編譯產物
+  du -sh /Users/tien-lungfu/Desktop/RyanRepos/datafusion-comet*/native/target 2>/dev/null | sort -h
+  ```
+
+  只列出建議可以清的項目（例如已 merge 的 PR worktree 的 `native/target`），**不自動刪**，等 user 決定。
+
+**build lock**：同一時刻只讓一個 Comet session 在本機編譯，避免 8 GB 記憶體不夠。
+
+- `cargo build`、`cargo test`、`cargo clippy`、`cargo bench`、`make format`（會跑 `./mvnw compile`）一律透過 script 跑，例如：
+
+  ```sh
+  /Users/tien-lungfu/Desktop/RyanRepos/datafusion-comet-ryan-skills/.ai/skills/ryan-update-pr-steps/with-build-lock.sh \
+    cargo test -p datafusion-comet-spark-expr
+  ```
+
+  單獨跑 `cargo fmt`、`git`、`gh`，或等 fork CI，都不用拿 lock。
+
+- 一定要寫絕對路徑，因為 working session 的 cwd 是它自己的 worktree。`datafusion-comet-ryan-skills` 這個 worktree 要一直停在有這支 script 的 branch 上。
+- 拿 lock、編譯、釋放都在同一個 bash call 裡完成（script 會自動處理），不要分成多個 call，也不要自己 `mkdir` 或刪 lock。
+- **配合 bash tool 的用法**：等 lock 最多 30 分鐘，再加上編譯時間，會超過 sync 的 `initial_wait`。
+  - 用 async mode 跑，等完成通知後再用 `read_bash` 讀結果。
+  - 前一個 call 還沒結束時，不要重跑同一個指令，否則同一個 session 會排在自己後面等 lock。
+  - 要中途停掉就用 `stop_bash`。實測過：script、編譯指令和它底下的子程序都會停掉，lock 也會釋放。
+- script 的行為：
+  - lock 是 `/Users/tien-lungfu/Desktop/RyanRepos/.comet-build.lock/`，用 `mkdir` 建立（atomic）。`owner` 檔記錄 script 的 PID、process 啟動時間，以及 cwd 和指令。`pgid` 檔記錄編譯指令的 process group，由指令自己在啟動時寫入，所以 script 在那一瞬間被 SIGKILL 也會留下記錄。
+  - 編譯指令跑在自己的 process group 裡，stdin 是 `/dev/null`。
+  - 拿不到就每 60 秒試一次，超過 30 分鐘還拿不到就 exit 75。這時停下來通知 user，附上 script 印出的 holder 資訊。
+  - 編譯結束或失敗都會釋放 lock。收到 HUP、INT、TERM 時，先對整個 process group 送 TERM（包括 `cargo` 底下的 `rustc`、`mvnw` 底下的 `java`），10 秒後還沒停就送 KILL，然後才釋放 lock。用 `setsid` 之類方式脫離 process group 的程序管不到，`cargo` 和 `mvnw` 不會這樣做。
+  - INT 只有在 script 從前景啟動時才有效：非互動式 bash 用 `&` 在背景啟動的程序，一開始就忽略 INT，bash 也沒辦法再 trap。HUP 和 TERM 不受影響。
+  - script 被 SIGKILL 時，沒機會停掉編譯，也沒機會釋放 lock。只要那個 process group 裡還有 process 在跑，lock 就不算 stale，其他 session 會等它編完才拿 lock，不會同時編譯。代價是：如果 process group 裡留下長駐的 process（例如編譯時啟動的 daemon），lock 會一直被佔住，其他 session 等滿 30 分鐘就 exit 75。這時用 `ps -o pid,pgid,command -g "$(cat /Users/tien-lungfu/Desktop/RyanRepos/.comet-build.lock/pgid)"` 看是哪些 process，交給 user 決定要不要停掉。
+  - 釋放前會確認 `owner` 還是自己；如果 lock 已經是別人的，就不會刪。
+  - stale lock 會自動清，條件是 owner 的 process 已經不存在（或 PID 被別的 process 重複使用，啟動時間對不上），而且編譯指令的 process group 也沒有 process 了。沒有 `owner` 檔，或 owner 已經不在但沒有 `pgid` 檔時，要超過 60 秒才當成 stale，讓剛啟動的一方有時間寫入。清理時先拿第二層 lock `.comet-build.lock.reap`，避免兩個 session 互刪。
+  - `ps` 讀不到啟動時間時一律當成 owner 還活著，寧可等也不搶 lock。拿 lock 時如果 `ps` 讀不到自己的啟動時間，就直接 exit 75，不拿 lock。
+  - 拿 lock 和清理 stale lock 的途中收到 signal，會等這一小段做完才處理，不會留下沒有 `owner` 的 lock 或殘留的 reap lock。
+  - `.comet-build.lock.reap` 留著超過 5 分鐘，代表之前的清理 crash 了。script 會 exit 75，停下來通知 user 手動處理。
+- 補強：拿 lock 前仍用 `ps` 檢查有沒有不經 lock 的編譯在跑（例如手動跑的 `cargo`、`rustc`、`mvn`），有的話錯開。VS Code 的 rust-analyzer 管不到。
+- **改 script 之後**一定要跑測試，全過才 commit：
+
+  ```sh
+  /Users/tien-lungfu/Desktop/RyanRepos/datafusion-comet-ryan-skills/.ai/skills/ryan-update-pr-steps/test-with-build-lock.sh
+  ```
+
+  測試用暫存的 lock 路徑、很短的 timeout，以及 `sh`、`sleep` 這類 mock 指令取代真正的編譯；`ps` 失敗和清理變慢的情況，則用放在 `PATH` 最前面的假 `ps`、`rm` 模擬。不會碰到真正的 lock，約 20 秒跑完。
+
+  涵蓋：exit status、互斥、各種 stale lock、`ps` 失敗、timeout、殘留的 reap lock、lock 已經不是自己的、HUP/INT/TERM 中斷（包括指令的子程序）、忽略 TERM 的指令、script 被 SIGKILL、owner 死了但還沒有 `pgid`、清理途中被中斷。新增行為時要一起補測試。
+
+  測試靠環境變數 `COMET_BUILD_LOCK`、`COMET_BUILD_LOCK_POLL_SECS`、`COMET_BUILD_LOCK_MAX_WAIT_SECS`、`COMET_BUILD_LOCK_OWNER_GRACE_SECS`、`COMET_BUILD_LOCK_REAP_STALE_SECS`、`COMET_BUILD_LOCK_KILL_GRACE_SECS` 覆蓋預設值，平常使用不要設。
 
 ### fork CI 和 benchmark
 
@@ -136,7 +195,7 @@ under the License.
 
 依照這份 template 產生 detailed steps。用不到的步驟可以拿掉，但順序不要變。每一步要寫具體到檔案、函式、測試名稱、指令。
 
-0. **準備**：確認沒有其他 session 在編譯；確認目前 branch 和 commit 是乾淨的（寫出 commit hash）；寫明這輪是否 merge upstream/main（預設不 merge）。
+0. **準備**：照「本機資源：disk 檢查和 build lock」檢查 disk（寫出剩餘 GB、這輪套用的門檻，以及這輪會不會在本機編譯），不夠就 hard stop；確認目前 branch 和 commit 是乾淨的（寫出 commit hash）；寫明這輪是否 merge upstream/main（預設不 merge）。
 1. **Code 修改**：每個 review point 或子問題各一步，寫明誰提的、改哪個檔案、怎麼改、要補的測試。新行為先寫測試，確認修改前會失敗（Rust 單元測試在本機跑；SQL 測試只能靠 fork CI，就先在 review 時確認測試能抓到原本的問題）。
 2. **Rust 單元測試和 benchmark 程式碼**（有需要時）：要補的 case 和 benchmark 形狀。
 3. **SQL 測試**：要加的查詢、資料表，以及預期是 native 還是 fallback。
@@ -149,7 +208,7 @@ under the License.
 
    列一張表：每個 comment（附完整 URL）、處理方式（在這個 PR 修／另開 issue／不處理和原因）、對應的 diff 或測試。**處理方式只能沿用第 0 步和 user 已確認的結論**；steps 確認後才出現的新 comment，或沒被 user 決定過的 comment，停下來列給 user，等 user 決定，不要自己補修。已確認要處理卻漏掉的才補，衝突的 comments 也要照第 0 步的方案處理；有補就回到第 4 步。
 
-6. **本機靜態檢查**：只編有改到的 crate，跑 clippy、單元測試、`cargo bench --no-run`。不跑 `./mvnw install` 和整套 JVM 測試，Maven 不用 `-pl`。
+6. **本機靜態檢查**：只編有改到的 crate，跑 clippy、單元測試、`cargo bench --no-run`，每個編譯指令都透過 `with-build-lock.sh`（絕對路徑）跑。不跑 `./mvnw install` 和整套 JVM 測試，Maven 不用 `-pl`。
 7. **fork 實驗**（有需要時）：例如在 `bench/<issue>` 跑 benchmark，用數據做決定；結果改變 code 的話重做第 4–6 步，接著直接進第 8 步（只有效能行為又改變時才重跑實驗）。跑完不要刪。
 8. **Commit 並 push**：等 fork CI（約 70 分鐘，每 2 分鐘檢查一次），失敗就修，修完重做第 4–6 步再 push。
 9. **Follow-up issue / backport tracking issue**（有需要時，包括 reviewer 要求另開的 issue）：草稿經 user 確認後才建立。這一步只記下 issue 的完整 URL，不回覆 reviewer。
