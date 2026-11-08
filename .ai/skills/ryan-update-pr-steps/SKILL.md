@@ -78,7 +78,7 @@ under the License.
 - **review 在 build 之前**：`cargo fmt` → 自己看過整份 diff → rubber-duck review → 有問題就修 → 最後才做編譯和測試。review 中途改了 code，最後的檢查一定要重跑，不能沿用舊結果。
 - **review 依據**：用 repo 的 `review-comet-pr` 加上對應領域的 skill（例如 `review-comet-expression-pr`）自己審查，有問題就修，修完再審，直到沒有問題。
 - **review 範圍**：這個 PR 所有的 review points，不只這一輪的 comment，確保沒有把之前的修正改壞。但修改只照 reviewer 說的做，不要節外生枝。
-- **push 前一定要檢查仔細**：fork CI 一輪約 70 分鐘（實際觀察值；`ci.md` 寫的是約 50–90 分鐘），跑錯就白等。
+- **push 前一定要檢查仔細**：fork CI 一輪約 70 分鐘（實際觀察值；`ci.md` 寫的是約 50–90 分鐘），跑錯就白等。push 前要跑的 CI Preflight 檢查見「push 前跑 CI Preflight」。
 - **tests first**：新行為先補測試（SQL 測試、Rust 單元測試），確認修改前會失敗。
 - 記得刪掉 dead src code 和 test code。
 
@@ -86,18 +86,31 @@ under the License.
 
 這台機器只有 8 GB 記憶體，重量級 build 會把機器拖垮。
 
-| 項目                                                                                     | 在哪跑                                                                                                                              |
-| ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `cargo fmt`、`cargo clippy -p <crate>`、`cargo test -p <crate>`、`cargo bench --no-run`  | 本機，只編有改到的 crate（例如 `native/spark-expr`），`CARGO_BUILD_JOBS=4`                                                          |
-| 有改 Scala 時：`make format`（會跑 Maven compile、scalafix、`spotless:apply`）           | 本機，只有這種輕量 Maven goal                                                                                                       |
-| 有改 `.md` 時：`npx prettier --check <file>`（CI Preflight 會檢查，不過就整個 run 失敗） | 本機                                                                                                                                |
-| `./mvnw install`、`CometSqlFileTestSuite`、整套 JVM 測試、SQL 檔測試                     | **不在本機跑**，交給 fork CI                                                                                                        |
-| 整個 native workspace 的 Rust 測試、TPC-H/TPC-DS 結果驗證                                | fork CI                                                                                                                             |
-| benchmark（需要穩定數字或比較多種策略）                                                  | fork 上另寫 workflow 跑                                                                                                             |
-| 其他 Spark profile、Spark SQL suite、Iceberg 其他版本                                    | fork CI 只跑預設 Spark profile 和 lint；其他的要請維護者在 upstream PR 加 `run-*` label（見 `docs/source/contributor-guide/ci.md`） |
+| 項目                                                                                    | 在哪跑                                                                                                                              |
+| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `cargo fmt`、`cargo clippy -p <crate>`、`cargo test -p <crate>`、`cargo bench --no-run` | 本機，只編有改到的 crate（例如 `native/spark-expr`），`CARGO_BUILD_JOBS=4`                                                          |
+| 有改 Scala 時：`make format`（會跑 Maven compile、scalafix、`spotless:apply`）          | 本機，只有這種輕量 Maven goal                                                                                                       |
+| CI Preflight 的檢查（見下方「push 前跑 CI Preflight」）                                 | 本機，每次 push 前跑；缺工具的項目見下方，要在回報裡寫明沒跑                                                                        |
+| `./mvnw install`、`CometSqlFileTestSuite`、整套 JVM 測試、SQL 檔測試                    | **不在本機跑**，交給 fork CI                                                                                                        |
+| 整個 native workspace 的 Rust 測試、TPC-H/TPC-DS 結果驗證                               | fork CI                                                                                                                             |
+| benchmark（需要穩定數字或比較多種策略）                                                 | fork 上另寫 workflow 跑                                                                                                             |
+| 其他 Spark profile、Spark SQL suite、Iceberg 其他版本                                   | fork CI 只跑預設 Spark profile 和 lint；其他的要請維護者在 upstream PR 加 `run-*` label（見 `docs/source/contributor-guide/ci.md`） |
 
 - Maven 一律從 repo root 跑，**絕對不要用 `-pl`**（見 `development.md` 的「Never Use `-pl` to Select Modules」）。
-- 本機編譯一律透過 build lock，開工前先檢查 disk，見下一節。
+- 本機編譯一律透過 build lock，開工前先檢查 disk，見「本機資源：disk 檢查和 build lock」。
+
+### push 前跑 CI Preflight
+
+fork CI 的第一個 job 是 Preflight，它沒過，後面的編譯和測試都不會跑，這一輪等於沒測到任何程式碼。Preflight 的檢查在本機只要十幾秒，**每次 push 前全部跑一次**，不要只挑看起來相關的。
+
+- **時機：commit 之後、push 之前**，worktree 要乾淨。任何 push 到 fork 的 branch 都算，包括 `bench/<issue>` 這類實驗 branch，因為 fork CI 一樣會先跑 Preflight。RAT 用 `git archive HEAD` 打包，`check-ci-config.py` 等幾個 script 也讀 git，在 commit 前跑會漏掉還沒 commit 的檔案。沒過就修，修完再 commit（新 commit 或 amend 都可以），然後全部重跑。
+- 檢查清單以 `.github/workflows/ci.yml` 的 `preflight` job 為準，每次照它的 `run:` 步驟跑，不要照記憶或這裡的舉例。名稱是 `Install ...` 或 `Set up ...` 的步驟只是裝工具，跳過；`Install mermaid-cli` 例外，它是 mermaid 檢查的前置步驟，見下方 mermaid 那項。從 repo root 跑。
+- 目前包含 `dev/ci/` 下的 Python 和 Node 檢查（例如 `check-suites.py`：新增的 test suite 要列進 `pr_build_linux.yml` 和 `pr_build_macos.yml`），以及 `prettier --check "**/*.md"`。CI 裝的是最新版 prettier，本機用 `npx prettier@latest` 對齊版本。這些都不用編譯，不用拿 build lock。
+- 本機缺工具的步驟，改用下面的手動檢查，並在回報裡逐項寫明哪些沒有真的跑、CI 可能因此失敗：
+  - **RAT license check** 需要 Java，本機沒有，所以這項只能 best-effort。要不要裝 JDK 由 user 決定，不要自己裝。RAT 檢查整個 source tarball，所以要看這個 PR 新增、修改和改名的每個檔案（`git diff --name-only --diff-filter=AMR $(git merge-base HEAD upstream/main)..HEAD`）：每個檔案要有 Apache license header，或符合 `dev/release/rat_exclude_files.txt` 裡的 glob（用 `fnmatch` 比對，不是完整路徑）。不能寫註解的格式（例如 `.json`、`.csv`、`.out`、圖片）一定要有對應的 exclude glob，沒有就在同一個 PR 補進 `rat_exclude_files.txt`。
+  - **`actionlint`**：有改 `.github/workflows/`（包括為了 `check-suites.py` 改 `pr_build_*.yml`）時才相關。本機沒裝就不要自己裝，在回報裡寫明「actionlint 沒跑，交給 CI」，要不要裝由 user 決定。
+  - **`check-mermaid.py`** 要裝 mermaid-cli 和 headless Chrome。只有改到 `.md` 裡的 mermaid 圖或 `dev/ci/check-mermaid.py` 才需要，否則跳過並寫明。
+- 全部通過（或只剩上面寫明沒跑的項目）才 push。
 
 ### 本機資源：disk 檢查和 build lock
 
@@ -161,7 +174,7 @@ under the License.
 ### fork CI 和 benchmark
 
 - push 到 `origin`（tlfua/datafusion-comet）會自動觸發 fork CI，約 70 分鐘。
-- 用背景 shell 每 2 分鐘查一次 CI，有 job 失敗或整個 run 結束就處理。失敗就讀 `gh run view <id> --log-failed`，修好後重做靜態檢查和 rubber-duck 再 push，最多連修 3 輪；如果是 CI 環境本身的問題，停下來回報。
+- 用背景 shell 每 2 分鐘查一次 CI，有 job 失敗或整個 run 結束就處理。失敗就讀 `gh run view <id> --log-failed`，修好後重做靜態檢查和 rubber-duck，commit 後照「push 前跑 CI Preflight」全部重跑再 push，最多連修 3 輪。Preflight 失敗代表這一輪還沒測到任何程式碼，也算一輪。如果是 CI 環境本身的問題，停下來回報。
 - **自己加的 benchmark 或實驗用的 fork CI branch（例如 `bench/<issue>`）和 workflow 跑完不要刪**，PR update 裡要放 run 的 link 給 reviewer 參考。等 PR merge 後、user 說可以刪才刪。
 - 實驗用的 workflow 和開關不要放進 PR，在 PR 說明裡寫清楚它們只是量測工具。
 - 貼實驗結果（PR 說明、PR thread 或 issue 留言）時，要寫明 config、版本、資料等實驗設置，並附 run 的 link。
@@ -209,8 +222,8 @@ under the License.
    列一張表：每個 comment（附完整 URL）、處理方式（在這個 PR 修／另開 issue／不處理和原因）、對應的 diff 或測試。**處理方式只能沿用第 0 步和 user 已確認的結論**；steps 確認後才出現的新 comment，或沒被 user 決定過的 comment，停下來列給 user，等 user 決定，不要自己補修。已確認要處理卻漏掉的才補，衝突的 comments 也要照第 0 步的方案處理；有補就回到第 4 步。
 
 6. **本機靜態檢查**：只編有改到的 crate，跑 clippy、單元測試、`cargo bench --no-run`，每個編譯指令都透過 `with-build-lock.sh`（絕對路徑）跑。不跑 `./mvnw install` 和整套 JVM 測試，Maven 不用 `-pl`。
-7. **fork 實驗**（有需要時）：例如在 `bench/<issue>` 跑 benchmark，用數據做決定；結果改變 code 的話重做第 4–6 步，接著直接進第 8 步（只有效能行為又改變時才重跑實驗）。跑完不要刪。
-8. **Commit 並 push**：等 fork CI（約 70 分鐘，每 2 分鐘檢查一次），失敗就修，修完重做第 4–6 步再 push。
+7. **fork 實驗**（有需要時）：例如在 `bench/<issue>` 跑 benchmark，用數據做決定；push 實驗 branch 前也要先跑 Preflight。結果改變 code 的話重做第 4–6 步，接著直接進第 8 步（只有效能行為又改變時才重跑實驗）。跑完不要刪。
+8. **Commit、跑 Preflight、push**：commit 之後、push 之前，照「push 前跑 CI Preflight」全部跑一次，寫出每一項的結果，以及哪些沒有真的跑；沒過就修、再 commit、全部重跑。push 後等 fork CI（約 70 分鐘，每 2 分鐘檢查一次），失敗就修，修完重做第 4–6 步，再回到這一步 commit、跑 Preflight、push。
 9. **Follow-up issue / backport tracking issue**（有需要時，包括 reviewer 要求另開的 issue）：草稿經 user 確認後才建立。這一步只記下 issue 的完整 URL，不回覆 reviewer。
 10. **更新 PR 並回覆 reviewer**：回覆前照第 5 步的做法再抓一次 comments，跟第 5 步的表比對（CI 跑的這段時間可能有新 comment）。有新增或被修改的 comment，先停下來給 user 看，需要改 code 就回到第 4 步，不要直接回覆。沒有差異才照表逐一回覆每個 comment，每個 comment 只回一次，附上 commit 和 CI/benchmark 的 link；要求另開 issue 的 comment，在同一則回覆裡附上 issue 的完整 URL。更新 PR 說明；需要時請維護者加 `run-*` 或 `run-benchmark-check` label；新 PR 從 draft 轉成 ready（先確認 non-draft PR 數量沒超過上限）。送出前照「連結一定要是合法、點得開的 hyperlink」那節逐一核實每個 link。
 11. **收尾**：把 session todo 標成完成，確認 worktree 乾淨，給 user 看 updated PR 的完整 URL（核實過、點得開）。
