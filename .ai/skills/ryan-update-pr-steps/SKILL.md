@@ -179,9 +179,43 @@ fork CI 的第一個 job 是 Preflight，它沒過，後面的編譯和測試都
 - 實驗用的 workflow 和開關不要放進 PR，在 PR 說明裡寫清楚它們只是量測工具。
 - 貼實驗結果（PR 說明、PR thread 或 issue 留言）時，要寫明 config、版本、資料等實驗設置，並附 run 的 link。
 
+### merge upstream/main
+
+repo guide 沒要求定期 sync main，所以沒有理由就不 merge。但每一輪都要在第 0 步先檢查，再提出建議，user 確認才 merge。
+
+**檢查**（產生 steps 時就做，都是唯讀的 `gh` 和 `git` 指令，不改 worktree，不違反「先只 output steps」）：
+
+1. **有沒有 conflict**：只用 `gh pr view <N> --repo apache/datafusion-comet --json mergeable,mergeStateStatus` 判斷，`<N>` 是 upstream 的 PR 編號。
+   - `mergeable` 是 `CONFLICTING`（`mergeStateStatus` 通常同時是 `DIRTY`）才算有 conflict。
+   - `BEHIND`、`BLOCKED`、`UNSTABLE`、`CLEAN` 這些都不是 conflict，不能當成要 merge 的理由。
+   - 任一欄位是 `UNKNOWN` 代表 GitHub 還在算：等 10 秒再查，總共最多查 3 次；還是 `UNKNOWN` 就寫明「無法判斷」，交給 user 決定。
+2. **有沒有 committer 要求**：用第 5 步列的 `gh` 指令抓 comments，看有沒有人要你 merge 或 rebase main。
+3. **main 有沒有相關的變更**：先 `git fetch upstream main`，取 `base=$(git merge-base HEAD upstream/main)`，然後跑：
+   - `git log --oneline $base..upstream/main -- <這個 PR 改到的檔案>`（檔案用 `git diff --name-only $base..HEAD` 取得）：main 改了這個 PR 依賴的 code。
+   - `git log --oneline $base..upstream/main -- .github/workflows dev/ci Makefile`：main 改了 CI 規則（例如新增 Preflight 檢查），不 merge 的話 CI 結果可能沒有參考價值。
+   - 最多列 10 個 commit，每個附完整 URL（用 `gh api repos/apache/datafusion-comet/commits/<sha> --jq .html_url` 核實）。
+   - 這項用 `git log`，不是用來判斷 conflict，所以不違反第 1 項「只用 `gh`」的規定。
+
+還沒開 PR 時三項都跳過，寫明「新 PR，不檢查」。user 已經交代「不 merge」時照樣檢查，但只回報結果，不建議 merge。
+
+**建議**：
+
+| 情況                            | 建議                                                                 |
+| ------------------------------- | -------------------------------------------------------------------- |
+| 有 conflict                     | merge，等 user 確認                                                  |
+| committer 要求 merge 或 rebase  | merge，附上 comment 的完整 URL；對方要的是 rebase 時，寫明改用 merge |
+| main 改了相關的 code 或 CI 規則 | 列出 commit，讓 user 決定                                            |
+| 都沒有                          | 不 merge，寫出三項的檢查結果                                         |
+
+**user 確認要 merge 之後**：
+
+- **用 merge，不用 rebase**：rebase 要 force push，還會改寫 reviewer 看過的 commit。
+- **時機**：在第 0 步、改 code 之前做，讓之後的 review、Preflight 和 CI 都測到合併後的版本。steps 裡先記 merge 前的 commit hash，merge 完再補上 merge commit 的 hash。
+- **conflict 不好解時停下來**：要做判斷的 conflict（不只是 import 順序或相鄰行之類的機械修改），先列出衝突的檔案和兩邊的改動給 user，不要自己決定。
+- **merge 之後**：merge commit（包括解 conflict 的修改）一樣要經過第 4–6 步、Preflight 和 fork CI。
+
 ### Git 與 PR
 
-- **不 merge 也不 rebase upstream/main**，除非 user 明確要求。repo guide 沒要求定期 sync main，只有衝突或 committer 要求時才做。
 - 需要 force push 時用 `git push --force-with-lease`，被 reject 就先整合 remote 的變更，絕對不用 `--force`。
 - 新 PR 先開 draft，fork CI 全過後才 publish。publish 前確認自己 open 的 non-draft PR 不超過 `development.md` 規定的上限（3 個）。
 - PR 改到 benchmark 原始碼（例如 `native/spark-expr/benches/`）時，請維護者加 `run-benchmark-check` label。
@@ -208,7 +242,7 @@ fork CI 的第一個 job 是 Preflight，它沒過，後面的編譯和測試都
 
 依照這份 template 產生 detailed steps。用不到的步驟可以拿掉，但順序不要變。每一步要寫具體到檔案、函式、測試名稱、指令。
 
-0. **準備**：照「本機資源：disk 檢查和 build lock」檢查 disk（寫出剩餘 GB、這輪套用的門檻，以及這輪會不會在本機編譯），不夠就 hard stop；確認目前 branch 和 commit 是乾淨的（寫出 commit hash）；寫明這輪是否 merge upstream/main（預設不 merge）。
+0. **準備**：照「本機資源：disk 檢查和 build lock」檢查 disk（寫出剩餘 GB、這輪套用的門檻，以及這輪會不會在本機編譯），不夠就 hard stop；確認目前 branch 和 commit 是乾淨的（寫出 commit hash）；照「merge upstream/main」那一節檢查 conflict、committer 要求，以及 main 上相關的變更，寫出三項的檢查結果和要不要 merge 的建議（沒有理由就不 merge），等 user 確認。
 1. **Code 修改**：每個 review point 或子問題各一步，寫明誰提的、改哪個檔案、怎麼改、要補的測試。新行為先寫測試，確認修改前會失敗（Rust 單元測試在本機跑；SQL 測試只能靠 fork CI，就先在 review 時確認測試能抓到原本的問題）。
 2. **Rust 單元測試和 benchmark 程式碼**（有需要時）：要補的 case 和 benchmark 形狀。
 3. **SQL 測試**：要加的查詢、資料表，以及預期是 native 還是 fallback。
@@ -230,7 +264,7 @@ fork CI 的第一個 job 是 Preflight，它沒過，後面的編譯和測試都
 
 ## 範例
 
-https://github.com/apache/datafusion-comet/pull/7246 （ANSI short-circuit，處理 rich7420 和 coderfender 的 comments）這一輪產生的 detailed steps。這個範例比 comment coverage verify 步驟早，所以沒有那一步；而且它把 template 的第 1 步拆成兩步，所以範例的編號跟 template 對不上。範例裡的「回到第 N 步」指的是範例自己的編號：
+https://github.com/apache/datafusion-comet/pull/7246 （ANSI short-circuit，處理 rich7420 和 coderfender 的 comments）這一輪產生的 detailed steps。這個範例比 comment coverage verify 步驟和 merge upstream/main 的檢查都早，所以沒有那一步，第 0 步也沒有三項的檢查結果；而且它把 template 的第 1 步拆成兩步，所以範例的編號跟 template 對不上。範例裡的「回到第 N 步」指的是範例自己的編號：
 
 0. 準備：確認沒有其他編譯在跑，分支停在乾淨的 `dc1559ce8`。全程不 merge upstream/main。
 1. rich7420 的修正：`is_deterministic` 直接回傳 `is_deterministic(n.inner())`，加巢狀測試。
