@@ -30,7 +30,7 @@ under the License.
 
 不管是給 user 看的 steps、回覆，還是寫進 PR、issue、commit message 的內容，都要遵守：
 
-- **一律寫完整 URL**，例如 `https://github.com/apache/datafusion-comet/pull/7246`。不要寫裸的 `#N`、`PR 7246`、`issue 123`、只有 commit hash 或檔名這類點不開的寫法（裸的 `#N` 在 fork 裡會連到錯的地方）。只有寫進 GitHub 會 render 的內容（PR、issue、comment 本文）才可以用 `apache/datafusion-comet#7246` 這種簡寫；給 user 看的終端機輸出一律完整 URL，因為終端機不會把簡寫轉成 link。
+- **一律寫完整 URL**，例如 `https://github.com/apache/datafusion-comet/pull/7456`。不要寫裸的 `#N`、`PR 7456`、`issue 123`、只有 commit hash 或檔名這類點不開的寫法（裸的 `#N` 在 fork 裡會連到錯的地方）。只有寫進 GitHub 會 render 的內容（PR、issue、comment 本文）才可以用 `apache/datafusion-comet#7246` 這種簡寫；給 user 看的終端機輸出一律完整 URL，因為終端機不會把簡寫轉成 link。
 - **不要自己拼 URL**。comment、review、CI run、commit 的 URL 要從 `gh` 的輸出拿（例如 `html_url`、`url` 欄位，或 `gh run list --json url`），不能用猜的 id 或 anchor 自己組。
 - **upstream 和 fork 不要搞混**：PR、issue、reviewer comment 在 `apache/datafusion-comet`；fork CI run、`bench/<issue>` branch、還沒進 upstream 的 commit 在 `tlfua/datafusion-comet`。commit link 要指到這個 commit 真的存在、而且已經 push 上去的 repo。
 - **commit**：一律用完整 URL `https://github.com/<owner>/<repo>/commit/<完整 40 字元 SHA>`，不要用短 SHA。commit message 不是 Markdown，只能放純 URL，不要用 `[文字](URL)`。
@@ -264,7 +264,7 @@ repo guide 沒要求定期 sync main，所以沒有理由就不 merge。但每�
 
 ## 範例
 
-https://github.com/apache/datafusion-comet/pull/7246 （ANSI short-circuit，處理 rich7420 和 coderfender 的 comments）這一輪產生的 detailed steps。這個範例比 comment coverage verify 步驟和 merge upstream/main 的檢查都早，所以沒有那一步，第 0 步也沒有三項的檢查結果；而且它把 template 的第 1 步拆成兩步，所以範例的編號跟 template 對不上。範例裡的「回到第 N 步」指的是範例自己的編號：
+https://github.com/apache/datafusion-comet/pull/7456 （ANSI short-circuit，對應 issue https://github.com/apache/datafusion-comet/issues/7246，處理 rich7420 和 coderfender 的 comments）這一輪產生的 detailed steps。這個範例比 comment coverage verify 步驟和 merge upstream/main 的檢查都早，所以沒有那一步，第 0 步也沒有三項的檢查結果；而且它把 template 的第 1 步拆成兩步，所以範例的編號跟 template 對不上。範例裡的「回到第 N 步」指的是範例自己的編號：
 
 0. 準備：確認沒有其他編譯在跑，分支停在乾淨的 `dc1559ce8`。全程不 merge upstream/main。
 1. rich7420 的修正：`is_deterministic` 直接回傳 `is_deterministic(n.inner())`，加巢狀測試。
