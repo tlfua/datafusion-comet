@@ -37,7 +37,7 @@ under the License.
 - **檔案或行號**：用帶完整 commit SHA 的 permalink（`blob/<SHA>/path#L10-L20`），不要用 branch 名稱；SHA 用 `git rev-parse` 取得，而且要已經 push 到該 repo。
 - **fork 的 benchmark 結果**：優先用 run URL 或帶 SHA 的 link，不要只放 branch 名稱。
 - **輸出前逐一核實**：GitHub 的 link 用 `gh api`、`gh pr view`、`gh run view` 確認存在。`#discussion_r…`、`#issuecomment-…`、`#pullrequestreview-…` 這類 anchor，`curl` 驗不出來（anchor 不會送到 server），一律以 `gh api` 回傳的 `html_url` 為準（例如 `gh api repos/apache/datafusion-comet/pulls/comments/<id> --jq .html_url`；一般 comment 用 `issues/comments/<id>`，review 用 `pulls/<N>/reviews/<id>`）。`curl -sIL -o /dev/null -w '%{http_code}'` 只拿來驗非 GitHub 的公開網頁；回 404 或 429 可能是 private repo 或 rate limit，不能直接當成結論。核實不了的 link 不要放，跟 user 說明。
-- **終端機輸出**：URL 單獨一行，或後面接空白再接中文；前後不要黏上中文標點或括號。不要用 `[文字](URL)`，很多終端機不會 render；`[文字](URL)` 只用在寫進 GitHub 的內容。
+- **URL 前後一定留空白**：URL 單獨一行，或前後接空白再接中文；不要黏上中文標點或括號（例如 `7246，處理`），不然終端機和 Markdown 會把「，處理」也當成 URL 的一部分。終端機輸出、寫進檔案（包括這份 SKILL）和 GitHub 上的內容都一樣。不要用 `[文字](URL)`，很多終端機不會 render；`[文字](URL)` 只用在寫進 GitHub 的內容。
 
 ## 什麼時候用
 
@@ -264,7 +264,7 @@ repo guide 沒要求定期 sync main，所以沒有理由就不 merge。但每�
 
 ## 範例
 
-https://github.com/apache/datafusion-comet/pull/7456 （ANSI short-circuit，對應 issue https://github.com/apache/datafusion-comet/issues/7246，處理 rich7420 和 coderfender 的 comments）這一輪產生的 detailed steps。這個範例比 comment coverage verify 步驟和 merge upstream/main 的檢查都早，所以沒有那一步，第 0 步也沒有三項的檢查結果；而且它把 template 的第 1 步拆成兩步，所以範例的編號跟 template 對不上。範例裡的「回到第 N 步」指的是範例自己的編號：
+https://github.com/apache/datafusion-comet/pull/7456 （ANSI short-circuit，對應 issue https://github.com/apache/datafusion-comet/issues/7246 ，處理 rich7420 和 coderfender 的 comments）這一輪產生的 detailed steps。這個範例比 comment coverage verify 步驟和 merge upstream/main 的檢查都早，所以沒有那一步，第 0 步也沒有三項的檢查結果；而且它把 template 的第 1 步拆成兩步，所以範例的編號跟 template 對不上。範例裡的「回到第 N 步」指的是範例自己的編號：
 
 0. 準備：確認沒有其他編譯在跑，分支停在乾淨的 `dc1559ce8`。全程不 merge upstream/main。
 1. rich7420 的修正：`is_deterministic` 直接回傳 `is_deterministic(n.inner())`，加巢狀測試。
