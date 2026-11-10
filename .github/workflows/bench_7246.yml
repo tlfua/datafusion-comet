@@ -1,0 +1,36 @@
+# Temporary benchmark for https://github.com/apache/datafusion-comet/pull/7456, never merged
+name: bench-7246-r4
+on:
+  push:
+    branches: [bench/7246-r4]
+permissions:
+  contents: read
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install protoc
+        run: sudo apt-get update -q && sudo apt-get install -yq protobuf-compiler
+      - name: Run benchmark before and after
+        working-directory: native
+        run: |
+          git config user.email bench@example.com && git config user.name bench
+          run_bench() {
+            cargo bench -p datafusion-comet-spark-expr --bench null_short_circuit -- \
+              --warm-up-time 1 --measurement-time 4 --output-format bencher 2>/dev/null \
+              | grep '^test ' | sed "s/^test /test $1 /"
+          }
+          cargo bench -p datafusion-comet-spark-expr --bench null_short_circuit --no-run
+          for round in 1 2; do
+            run_bench after
+            # Before: the previous head's source with the new benchmark, which no longer
+            # asserts which shapes are wrapped
+            git checkout -q c818be3bf -- spark-expr/src
+            sed -i 's/assert_eq!(lazy.is::<NullShortCircuit>(), wrapped, "{name}");/let _ = wrapped;/' \
+              spark-expr/benches/null_short_circuit.rs
+            run_bench before
+            git checkout -q HEAD -- spark-expr/src spark-expr/benches
+          done
