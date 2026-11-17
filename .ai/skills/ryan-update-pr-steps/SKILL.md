@@ -106,8 +106,26 @@ fork CI 的第一個 job 是 Preflight，它沒過，後面的編譯和測試都
 - **時機：commit 之後、push 之前**，worktree 要乾淨。任何 push 到 fork 的 branch 都算，包括 `bench/<issue>` 這類實驗 branch，因為 fork CI 一樣會先跑 Preflight。RAT 用 `git archive HEAD` 打包，`check-ci-config.py` 等幾個 script 也讀 git，在 commit 前跑會漏掉還沒 commit 的檔案。沒過就修，修完再 commit（新 commit 或 amend 都可以），然後全部重跑。
 - 檢查清單以 `.github/workflows/ci.yml` 的 `preflight` job 為準，每次照它的 `run:` 步驟跑，不要照記憶或這裡的舉例。名稱是 `Install ...` 或 `Set up ...` 的步驟只是裝工具，跳過；`Install mermaid-cli` 例外，它是 mermaid 檢查的前置步驟，見下方 mermaid 那項。從 repo root 跑。
 - 目前包含 `dev/ci/` 下的 Python 和 Node 檢查（例如 `check-suites.py`：新增的 test suite 要列進 `pr_build_linux.yml` 和 `pr_build_macos.yml`），以及 `prettier --check "**/*.md"`。CI 裝的是最新版 prettier，本機用 `npx prettier@latest` 對齊版本。這些都不用編譯，不用拿 build lock。
+- **RAT license check**（`ci.yml` 的 `Apache RAT license check`）在本機真的跑，結果要和 CI 一樣：
+  - 不用另外安裝東西，只需要 Java（Homebrew 的 openjdk@17）、curl、python3、git。`dev/release/check-rat.sh HEAD` 會把 `HEAD` 打包成 source tarball，再呼叫 `dev/release/run-rat.sh`；後者每次都用 curl 從 Maven Central 下載 `apache-rat-0.16.1.jar`，再用 `java -jar` 執行。
+  - openjdk@17 是 keg-only，不在預設 PATH 裡。`/usr/bin/java` 只是 macOS 的 stub，會印 `Unable to locate a Java Runtime`，所以指令前面要加上 PATH。
+  - 從 repo root 跑：
+
+    ```sh
+    PATH="/opt/homebrew/opt/openjdk@17/bin:$PATH" \
+      JAVA_TOOL_OPTIONS=-Dfile.encoding=ANSI_X3.4-1968 ./dev/release/check-rat.sh HEAD
+    ```
+
+    `JAVA_TOOL_OPTIONS` 一定要加。`ci.yml` 本身沒有設這個參數，但 Java 17 的預設編碼跟著 locale 走：CI 的 Linux runner 實際上是用 ASCII，本機 macOS 的 locale 是 UTF-8。所以要明確設成 ASCII，本機結果才會和 CI 一致（實測過）。多印一行 `Picked up JAVA_TOOL_OPTIONS: ...` 是正常的。
+
+  - 判讀以 exit code 為準：
+    - **PASS**：最後印出 `No unapproved licenses`，exit code 0。
+    - **FAIL**：先逐行列出每個 `NOT APPROVED: <檔案> ...`，最後印出 `Apache RAT found unapproved licenses`，exit code 1。
+    - **兩句都沒印、exit code 不是 0**：是環境問題，不是 PR 的問題。例如 `java` 找不到（沒加 PATH），或 curl 下載 RAT jar 失敗（每次都要連 Maven Central）。修好環境後重跑，不能當成 PASS，也不能略過；修不好就停下來告訴 user。
+  - FAIL 就要修，不能當成「以 CI 為準」略過。被列出的檔案補上 Apache license header；不能寫註解的格式（例如 `.json`、`.csv`、`.out`、圖片）就在同一個 PR 把對應的 glob 補進 `dev/release/rat_exclude_files.txt`（用 `fnmatch` 比對，不是完整路徑）。修完再 commit，然後全部重跑。
+  - **編碼造成的誤報**：如果沒加 `JAVA_TOOL_OPTIONS`，被標出來的又只有 `spark/src/test/resources/test-data/text-test-1.txt` 這類非 ASCII、沒有 license header 的測試資料，那是本機編碼造成的誤報，不是 PR 的問題，upstream CI 對同一份 code 是通過的。加上 `JAVA_TOOL_OPTIONS` 重跑即可。**不要把這類檔案加進 `rat_exclude_files.txt`。**
+
 - 本機缺工具的步驟，改用下面的手動檢查，並在回報裡逐項寫明哪些沒有真的跑、CI 可能因此失敗：
-  - **RAT license check** 需要 Java，本機沒有，所以這項只能 best-effort。要不要裝 JDK 由 user 決定，不要自己裝。RAT 檢查整個 source tarball，所以要看這個 PR 新增、修改和改名的每個檔案（`git diff --name-only --diff-filter=AMR $(git merge-base HEAD upstream/main)..HEAD`）：每個檔案要有 Apache license header，或符合 `dev/release/rat_exclude_files.txt` 裡的 glob（用 `fnmatch` 比對，不是完整路徑）。不能寫註解的格式（例如 `.json`、`.csv`、`.out`、圖片）一定要有對應的 exclude glob，沒有就在同一個 PR 補進 `rat_exclude_files.txt`。
   - **`actionlint`**：有改 `.github/workflows/`（包括為了 `check-suites.py` 改 `pr_build_*.yml`）時才相關。本機沒裝就不要自己裝，在回報裡寫明「actionlint 沒跑，交給 CI」，要不要裝由 user 決定。
   - **`check-mermaid.py`** 要裝 mermaid-cli 和 headless Chrome。只有改到 `.md` 裡的 mermaid 圖或 `dev/ci/check-mermaid.py` 才需要，否則跳過並寫明。
 - 全部通過（或只剩上面寫明沒跑的項目）才 push。
