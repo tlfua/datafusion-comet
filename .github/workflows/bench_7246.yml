@@ -1,0 +1,35 @@
+# Temporary benchmark for https://github.com/apache/datafusion-comet/pull/7456, never merged
+name: bench-7246-r6
+on:
+  push:
+    branches: [bench/7246-r6]
+permissions:
+  contents: read
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install protoc
+        run: sudo apt-get update -q && sudo apt-get install -yq protobuf-compiler
+      - name: Run benchmark after, before (d54d9a469) and main (f67d51d24)
+        working-directory: native
+        run: |
+          run_bench() {
+            cargo bench -p datafusion-comet-spark-expr --bench "$2" -- \
+              --warm-up-time 1 --measurement-time 4 --output-format bencher 2>/dev/null \
+              | grep '^test ' | sed "s/^test /test $1 /"
+          }
+          cargo bench -p datafusion-comet-spark-expr --bench null_short_circuit --bench lazy_logical --no-run
+          for round in 1 2; do
+            run_bench after null_short_circuit
+            run_bench after lazy_logical
+            git checkout -q d54d9a469 -- spark-expr/src
+            run_bench before null_short_circuit
+            run_bench before lazy_logical
+            git checkout -q f67d51d24 -- spark-expr/src
+            run_bench main lazy_logical
+            git checkout -q HEAD -- spark-expr/src
+          done
